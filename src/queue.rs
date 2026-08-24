@@ -20,6 +20,10 @@ use crate::models::{Booking, Conference, BookingStatus};
 use crate::schema::{bookings, conferences};
 use tokio::sync::Mutex;
 
+// Global configuration for confirmation timeout
+const CONFIRMATION_TIMEOUT_SECONDS: i64 = 20;
+const CONFIRMATION_TIMEOUT_MS: u32 = (CONFIRMATION_TIMEOUT_SECONDS * 1000) as u32;
+
 type DbPool = Pool<ConnectionManager<PgConnection>>;
 type Result<T> = std::result::Result<T, Box<dyn std::error::Error + Send + Sync>>;
 
@@ -225,8 +229,8 @@ impl ExpiredConfirmationConsumer {
             .optional()?;
         
         if let Some(booking) = next_waitlisted {
-            // Set confirmation deadline to 10 seconds
-            let deadline = Utc::now() + Duration::seconds(10);
+            // Set confirmation deadline to configurable seconds
+            let deadline = Utc::now() + Duration::seconds(CONFIRMATION_TIMEOUT_SECONDS);
             
             // Update booking in database - set confirmation pending
             diesel::update(bookings::table)
@@ -246,21 +250,27 @@ impl ExpiredConfirmationConsumer {
                 conference_name: conference_name.to_string(),
             };
             
-            // Publish message to confirmation timer queue with 10-second TTL
+            // Publish message to confirmation timer queue with configurable TTL
             let serialized = serde_json::to_string(&expiration_msg)?;
             let content = serialized.as_bytes().to_vec();
             
             let properties = BasicProperties::default()
                 .with_delivery_mode(2) // persistent
-                .with_expiration("10000") // 10 seconds in milliseconds
+                .with_expiration(&CONFIRMATION_TIMEOUT_MS.to_string()) // configurable timeout in milliseconds
                 .finish();
             
             let args = BasicPublishArguments::new("", "confirmation.timer");
             
-            channel.basic_publish(properties, content, args).await?;
+            channel
+                .basic_publish(
+                    properties,
+                    content,
+                    args,
+                )
+                .await?;
             
-            info!("🔄 Auto-promoted booking {} from waitlist for conference '{}' (slots available: {}). Confirmation expires in 10 seconds at {}", 
-                  booking.booking_id, conference_name, conference.available_slots, deadline);
+            info!("🔄 Auto-promoted booking {} from waitlist for conference '{}' (slots available: {}). Confirmation expires in {} seconds at {}", 
+                  booking.booking_id, conference_name, conference.available_slots, CONFIRMATION_TIMEOUT_SECONDS, deadline);
         } else {
             info!("ℹ️ No more waitlisted bookings for conference '{}' - waitlist exhausted", conference_name);
         }
@@ -677,8 +687,8 @@ impl WaitlistQueueService {
                     .optional()?;
                 
                 if let Some(booking) = next_waitlisted {
-                    // Set confirmation deadline to 10 seconds for testing
-                    let deadline = Utc::now() + Duration::seconds(10);
+                    // Set confirmation deadline to configurable seconds
+                    let deadline = Utc::now() + Duration::seconds(CONFIRMATION_TIMEOUT_SECONDS);
                     
                     // Update booking in database - set confirmation pending
                     diesel::update(bookings::table)
@@ -718,16 +728,16 @@ impl WaitlistQueueService {
                         conference_name: conference_name.clone(),
                     };
                     
-                    // Publish message to confirmation timer queue with 10-second TTL
+                    // Publish message to confirmation timer queue with configurable TTL
                     let serialized = serde_json::to_string(&expiration_msg)?;
                     let content = serialized.as_bytes().to_vec();
                     
                     let properties = BasicProperties::default()
                         .with_delivery_mode(2) // persistent
-                        .with_expiration("10000") // 10 seconds in milliseconds
+                        .with_expiration(&CONFIRMATION_TIMEOUT_MS.to_string()) // configurable timeout in milliseconds
                         .finish();
                     
-                    let args: BasicPublishArguments = BasicPublishArguments::new("", &service.confirmation_timer_queue);
+                    let args = BasicPublishArguments::new("", &service.confirmation_timer_queue);
                     
                     channel
                         .basic_publish(
@@ -738,8 +748,8 @@ impl WaitlistQueueService {
                         .await?;
                     
                     info!(
-                        "📢 Promoted booking {} from waitlist for conference '{}' (slots available: {}). Confirmation expires in 10 seconds at {}", 
-                        booking.booking_id, conference_name, conference.available_slots, deadline
+                        "📢 Promoted booking {} from waitlist for conference '{}' (slots available: {}). Confirmation expires in {} seconds at {}", 
+                        booking.booking_id, conference_name, conference.available_slots, CONFIRMATION_TIMEOUT_SECONDS, deadline
                     );
                 } else {
                     info!("No waitlisted bookings found for conference '{}'", conference_name);

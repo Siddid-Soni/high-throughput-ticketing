@@ -1,4 +1,4 @@
-# Conference Booking System
+# Waitlist Queueing system
 
 A production-ready, highly secure conference booking system built with Rust, Actix-Web, Diesel, PostgreSQL, and RabbitMQ. Features advanced waitlist management, robust queue processing, comprehensive security controls, and horizontal scalability.
 
@@ -284,6 +284,28 @@ API_REFERENCE.md     # Complete API documentation
 - **[API_REFERENCE.md](API_REFERENCE.md)**: Complete API documentation with security details
 - **[all_tests.py](all_tests.py)**: Comprehensive test suite covering all scenarios
 - **Docker Compose**: Ready-to-deploy infrastructure configuration
+
+## Issues
+The system has two separate queuing mechanisms:
+Database-based waitlist (positions 1, 2, 3...)
+RabbitMQ waitlist queue (messages that never get consumed)
+
+When promotions happen:
+✅ Database gets updated correctly
+❌ Queue messages remain untouched (they're just sitting there!)
+
+**Option A: Make Queue Authoritative**
+- Consume messages from waitlist queue during promotion
+- Use queue ordering instead of database positions
+
+**Option B: Eliminate Redundant Queue**
+- Remove waitlist queue entirely
+- Only use timer queue for confirmation timeouts
+- Use database as single source of truth
+
+**Option C: Sync Database and Queue**
+- Consume queue messages when promotions happen
+- Keep both systems in sync
 
 ## 📄 License
 
