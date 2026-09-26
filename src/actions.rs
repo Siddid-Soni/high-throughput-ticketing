@@ -7,7 +7,6 @@ type DbError = Box<dyn std::error::Error + Send + Sync>;
 pub fn insert_new_user(conn: &mut PgConnection, nm: &str, topics: &Vec<String>) -> Result<models::User, DbError> {
     use crate::schema::{users::dsl::*, user_interests::dsl::user_id as tuid, user_interests::dsl::{topic, user_interests}};
     
-    // Use transaction to ensure user and topics are created atomically
     conn.transaction(|conn| {
         let new_user = models::User {
             user_id: nm.to_owned()
@@ -31,7 +30,6 @@ pub fn create_new_conference(conn: &mut PgConnection, form: &models::NewConferen
     let start_time = NaiveDateTime::parse_from_str(&form.start, "%Y-%m-%d %H:%M:%S")?;
     let end_time = NaiveDateTime::parse_from_str(&form.end, "%Y-%m-%d %H:%M:%S")?;
     
-    // Validate business rules
     if start_time >= end_time {
         return Err("Start timestamp must be before end timestamp".into());
     }
@@ -49,7 +47,6 @@ pub fn create_new_conference(conn: &mut PgConnection, form: &models::NewConferen
         return Err("Maximum 10 topics allowed".into());
     }
     
-    // Use transaction to ensure conference and topics are created atomically
     conn.transaction(|conn| {
         let new_conf = models::NewConferenceInternal {
             name: form.name.clone(),
@@ -67,7 +64,6 @@ pub fn create_new_conference(conn: &mut PgConnection, form: &models::NewConferen
         }).collect::<Vec<_>>();
         diesel::insert_into(conference_topics).values(&topics).execute(conn)?;
 
-        // Retrieve the created conference
         let created_conference = conferences
             .find(id)
             .first::<models::Conference>(conn)?;
@@ -156,12 +152,10 @@ pub fn create_confirmed_booking(
     };
     
     conn.transaction(|conn| {
-        // Decrement available slots
         diesel::update(conferences.find(conf_id))
             .set(available_slots.eq(available_slots - 1))
             .execute(conn)?;
         
-        // Create booking
         let new_booking = models::NewBooking {
             conference_id: conf_id,
             user_id: uid.to_string(),
@@ -175,7 +169,6 @@ pub fn create_confirmed_booking(
             .returning(booking_id)
             .get_result::<i32>(conn)?;
         
-        // Get the created booking
         let booking = bookings.find(new_booking_id).first::<models::Booking>(conn)?;
         
         Ok(booking)
@@ -195,9 +188,7 @@ pub fn create_waitlist_booking(
         booking_id
     };
     
-    // Use transaction to prevent race conditions in waitlist position calculation
     conn.transaction(|conn| {
-        // Get next waitlist position without FOR UPDATE on aggregate
         let max_position: Option<i32> = bookings
             .filter(bookings_conference_id.eq(conf_id))
             .filter(status.eq(BookingStatus::WAITLISTED))
@@ -262,7 +253,6 @@ pub fn confirm_waitlist_booking(
     use crate::schema::conferences::dsl::{conferences, available_slots};
     
     conn.transaction(|conn| {
-        // Get the booking
         let booking = bookings.find(booking_id).first::<models::Booking>(conn)?;
         
         if booking.status != BookingStatus::ConfirmationPending {
@@ -275,12 +265,10 @@ pub fn confirm_waitlist_booking(
         
         let conf_id = booking.conference_id.ok_or("Booking has no conference")?;
         
-        // Decrement available slots
         diesel::update(conferences.find(conf_id))
             .set(available_slots.eq(available_slots - 1))
             .execute(conn)?;
         
-        // Update booking status
         diesel::update(bookings.find(booking_id))
             .set((
                 status.eq(BookingStatus::CONFIRMED),
@@ -290,14 +278,12 @@ pub fn confirm_waitlist_booking(
             ))
             .execute(conn)?;
         
-        // Get updated booking
         let updated_booking = bookings.find(booking_id).first::<models::Booking>(conn)?;
         
         Ok(updated_booking)
     })
 }
 
-// 🔒 SECURITY FIX: Secure confirmation function that validates user ownership
 pub fn confirm_waitlist_booking_secure(
     conn: &mut PgConnection,
     booking_id: i32,
@@ -313,13 +299,10 @@ pub fn confirm_waitlist_booking_secure(
     use crate::schema::conferences::dsl::{conferences, available_slots};
     
     conn.transaction(|conn| {
-        // Get the booking
         let booking = bookings.find(booking_id).first::<models::Booking>(conn)?;
         
-        // 🔒 CRITICAL SECURITY CHECK: Verify the user owns this booking
         match &booking.user_id {
             Some(booking_user_id) if booking_user_id == user_id => {
-                // User is authorized to confirm this booking
             },
             Some(booking_user_id) => {
                 return Err(format!("Access denied: booking {} belongs to user '{}', not '{}'", 
@@ -330,7 +313,6 @@ pub fn confirm_waitlist_booking_secure(
             }
         }
         
-        // Check booking status
         if booking.status != BookingStatus::ConfirmationPending {
             return Err("Booking is not in confirmation pending state".into());
         }
@@ -339,7 +321,6 @@ pub fn confirm_waitlist_booking_secure(
             return Err("Booking cannot be confirmed at this time".into());
         }
         
-        // Check if confirmation deadline has passed
         if let Some(deadline) = booking.waitlist_confirmation_deadline {
             let now = Utc::now().naive_utc();
             if now > deadline {
@@ -349,12 +330,10 @@ pub fn confirm_waitlist_booking_secure(
         
         let conf_id = booking.conference_id.ok_or("Booking has no conference")?;
         
-        // Decrement available slots
         diesel::update(conferences.find(conf_id))
             .set(available_slots.eq(available_slots - 1))
             .execute(conn)?;
         
-        // Update booking status
         diesel::update(bookings.find(booking_id))
             .set((
                 status.eq(BookingStatus::CONFIRMED),
@@ -364,7 +343,6 @@ pub fn confirm_waitlist_booking_secure(
             ))
             .execute(conn)?;
         
-        // Get updated booking
         let updated_booking = bookings.find(booking_id).first::<models::Booking>(conn)?;
         
         Ok(updated_booking)
@@ -391,7 +369,6 @@ pub fn cancel_booking(conn: &mut PgConnection, booking_id: i32) -> Result<models
             return Err("Booking is already canceled".into());
         }
         
-        // If it was a confirmed booking, increment available slots
         if booking.status == BookingStatus::CONFIRMED {
             if let Some(conf_id) = booking.conference_id {
                 diesel::update(conferences.find(conf_id))
@@ -400,7 +377,6 @@ pub fn cancel_booking(conn: &mut PgConnection, booking_id: i32) -> Result<models
             }
         }
         
-        // Update booking to canceled
         diesel::update(bookings.find(booking_id))
             .set((
                 status.eq(BookingStatus::CANCELED),
@@ -471,9 +447,7 @@ pub fn remove_from_overlapping_waitlists(
 ) -> Result<(), DbError> {
     use crate::schema::{bookings, conferences};
     
-    // Use transaction to prevent race conditions between SELECT and UPDATE
     conn.transaction(|conn| {
-        // Find overlapping conferences where user is waitlisted
         let overlapping_bookings: Vec<i32> = bookings::table
             .inner_join(conferences::table)
             .filter(bookings::user_id.eq(user_id))
@@ -486,7 +460,6 @@ pub fn remove_from_overlapping_waitlists(
             .select(bookings::booking_id)
             .load(conn)?;
         
-        // Cancel these waitlist bookings
         if !overlapping_bookings.is_empty() {
             diesel::update(bookings::table)
                 .filter(bookings::booking_id.eq_any(overlapping_bookings))
@@ -509,9 +482,7 @@ pub fn auto_cancel_expired_conferences(conn: &mut PgConnection) -> Result<Vec<St
     
     let now = Utc::now().naive_utc();
     
-    // Use transaction to ensure all conference booking cancellations are atomic
     conn.transaction(|conn| {
-        // Get conferences that have started
         let started_conferences: Vec<(i32, String)> = conferences::table
             .filter(conferences::start_timestamp.le(now))
             .select((conferences::conference_id, conferences::name))
@@ -520,7 +491,6 @@ pub fn auto_cancel_expired_conferences(conn: &mut PgConnection) -> Result<Vec<St
         let mut updated_conferences = Vec::new();
         
         for (conf_id, conf_name) in started_conferences {
-            // Cancel all waitlisted bookings for this conference
             let updated_count = diesel::update(bookings::table)
                 .filter(bookings::conference_id.eq(conf_id))
                 .filter(bookings::status.eq(BookingStatus::WAITLISTED))
@@ -542,7 +512,6 @@ pub fn auto_cancel_expired_conferences(conn: &mut PgConnection) -> Result<Vec<St
     })
 }
 
-// New atomic booking function that prevents race conditions
 pub fn create_booking_atomic(
     conn: &mut PgConnection,
     conference_id: i32,
@@ -554,13 +523,12 @@ pub fn create_booking_atomic(
     };
     
     conn.transaction(|conn| {
-        // Lock the conference row for update to prevent race conditions
+        // Lock the conference row so concurrent bookings serialize on it
         let conference: models::Conference = conferences
             .filter(conf_id_col.eq(conference_id))
             .for_update()
             .first(conn)?;
         
-        // Check for existing active booking within the transaction (using FOR UPDATE to lock the booking rows)
         let existing_booking: Option<i32> = bookings
             .filter(bookings_user_id.eq(user_id))
             .filter(bookings_conference_id.eq(conference_id))
@@ -574,26 +542,21 @@ pub fn create_booking_atomic(
             return Err("User already has an active booking for this conference".into());
         }
         
-        // 🔥 SECURITY FIX: Check if there are any pending confirmations for this conference
         let pending_confirmations: i64 = bookings
             .filter(bookings_conference_id.eq(conference_id))
             .filter(status.eq(BookingStatus::ConfirmationPending))
             .count()
             .get_result(conn)?;
         
-        // 🔥 SECURITY FIX: Check if there are existing waitlisted bookings
         let existing_waitlist: i64 = bookings
             .filter(bookings_conference_id.eq(conference_id))
             .filter(status.eq(BookingStatus::WAITLISTED))
             .count()
             .get_result(conn)?;
         
-        // Only allow direct confirmation if:
-        // 1. Slots are available AND
-        // 2. No one is currently pending confirmation AND  
-        // 3. No existing waitlist (first-come-first-served for initial bookings only)
+        // Confirm directly only when a slot is free, no confirmation is pending,
+        // and nobody is already waitlisted; otherwise join the waitlist to preserve order.
         if conference.available_slots > 0 && pending_confirmations == 0 && existing_waitlist == 0 {
-            // Create confirmed booking and decrement slots atomically
             diesel::update(conferences.filter(conf_id_col.eq(conference_id)))
                 .set(available_slots.eq(available_slots - 1))
                 .execute(conn)?;
@@ -614,16 +577,11 @@ pub fn create_booking_atomic(
             let booking = bookings.find(new_booking_id).first::<models::Booking>(conn)?;
             Ok(booking)
         } else {
-            // Add to waitlist in all other cases:
-            // - No slots available, OR
-            // - Someone is pending confirmation (slot reserved), OR
-            // - Existing waitlist (maintain queue order)
             create_waitlist_booking_internal(conn, conference_id, user_id)
         }
     })
 }
 
-// Internal function for waitlist creation that can be called within a transaction
 fn create_waitlist_booking_internal(
     conn: &mut PgConnection,
     conf_id: i32,
@@ -637,7 +595,6 @@ fn create_waitlist_booking_internal(
         booking_id
     };
     
-    // Get next waitlist position without FOR UPDATE on aggregate
     let max_position: Option<i32> = bookings
         .filter(bookings_conference_id.eq(conf_id))
         .filter(status.eq(BookingStatus::WAITLISTED))

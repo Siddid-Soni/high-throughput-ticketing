@@ -106,7 +106,6 @@ pub struct NewBooking {
     pub can_confirm: Option<bool>,
 }
 
-// Request/Response models for API
 #[derive(Debug, Deserialize, Clone)]
 pub struct BookConferenceRequest {
     pub name: String,
@@ -126,11 +125,10 @@ pub struct BookingIdRequest {
     pub booking_id: i32,
 }
 
-// 🔒 SECURITY FIX: New secure confirmation request that includes user authorization
 #[derive(Debug, Deserialize)]
 pub struct ConfirmBookingRequest {
     pub booking_id: i32,
-    pub user_id: String,  // Required for security - only the booking owner can confirm
+    pub user_id: String,
 }
 
 #[derive(Debug, Serialize)]

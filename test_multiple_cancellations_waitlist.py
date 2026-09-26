@@ -61,29 +61,29 @@ def count_booking_statuses(bookings):
     return confirmed, pending, waitlisted, canceled
 
 def print_booking_state(bookings, title):
-    print(f"\n📊 {title}:")
+    print(f"\n{title}:")
     for user_id, booking_id, status in bookings:
         print(f"   - {user_id}: booking {booking_id} ({status})")
 
 async def test_multiple_cancellations_with_waitlist(session):
     """Test multiple cancellations when more people are booked than available slots"""
-    print("🧪 Testing multiple cancellations with 3 slots, 5 users, and 2 cancellations...")
-    print("📝 Configuration: 20-second confirmation timeout")
+    print("Testing multiple cancellations with 3 slots, 5 users, and 2 cancellations...")
+    print("Configuration: 20-second confirmation timeout")
     timestamp = str(int(time.time()))
     conf_name = f"MultiCancelWaitlistTest{timestamp}"
     
     # Create conference with 3 slots that starts in 45 seconds (enough time for 20-second confirmation timeout + observations)
-    print("📅 Creating conference with 3 slots, starting in 45 seconds...")
+    print("Creating conference with 3 slots, starting in 45 seconds...")
     await create_conference(session, conf_name, slots=3, seconds_ahead=45)
     
     # Create 5 users
-    print("👥 Creating 5 users...")
+    print("Creating 5 users...")
     users = [f"mcwuser{i}{timestamp}" for i in range(5)]
     for user in users:
         await create_user(session, user)
     
     # Book all 5 users (3 confirmed, 2 waitlisted)
-    print("📝 Booking all 5 users (expecting 3 confirmed, 2 waitlisted)...")
+    print("Booking all 5 users (expecting 3 confirmed, 2 waitlisted)...")
     bookings = []
     for user in users:
         booking_id, status = await book_conference(session, user, conf_name)
@@ -95,28 +95,28 @@ async def test_multiple_cancellations_with_waitlist(session):
     waitlisted_bookings = [(u, bid, s) for u, bid, s in bookings if s == "WAITLISTED"]
     
     if len(confirmed_bookings) != 3 or len(waitlisted_bookings) != 2:
-        print(f"❌ Initial state incorrect: expected 3 confirmed and 2 waitlisted, got {len(confirmed_bookings)} confirmed and {len(waitlisted_bookings)} waitlisted")
+        print(f"[FAIL] Initial state incorrect: expected 3 confirmed and 2 waitlisted, got {len(confirmed_bookings)} confirmed and {len(waitlisted_bookings)} waitlisted")
         return False
     
-    print("✅ Initial state correct: 3 confirmed, 2 waitlisted")
+    print("[PASS] Initial state correct: 3 confirmed, 2 waitlisted")
     
     # Cancel 2 of the confirmed bookings
     cancellation_targets = confirmed_bookings[:2]  # Cancel first 2 confirmed bookings
-    print(f"🚫 Canceling 2 confirmed bookings: {[u for u, bid, s in cancellation_targets]}")
+    print(f"Canceling 2 confirmed bookings: {[u for u, bid, s in cancellation_targets]}")
     
     start_time = time.time()
     cancel_tasks = [cancel_booking(session, bid) for u, bid, s in cancellation_targets]
     cancel_results = await asyncio.gather(*cancel_tasks)
     end_time = time.time()
     
-    print(f"⚡ Cancellations completed in {(end_time - start_time) * 1000:.1f}ms")
+    print(f"Cancellations completed in {(end_time - start_time) * 1000:.1f}ms")
     
     if not all(cancel_results):
-        print("❌ Some cancellations failed")
+        print("[FAIL] Some cancellations failed")
         return False
     
     # Wait a moment for promotion processing
-    print("⏳ Waiting 3 seconds for queue processing and promotions...")
+    print("Waiting 3 seconds for queue processing and promotions...")
     await asyncio.sleep(3)
     
     # Check state after cancellations
@@ -125,7 +125,7 @@ async def test_multiple_cancellations_with_waitlist(session):
     
     confirmed, pending, waitlisted, canceled = count_booking_statuses(current_bookings)
     
-    print(f"📊 Final state: confirmed={confirmed}, pending={pending}, waitlisted={waitlisted}, canceled={canceled}")
+    print(f"Final state: confirmed={confirmed}, pending={pending}, waitlisted={waitlisted}, canceled={canceled}")
     
     # Expected behavior:
     # - 2 bookings should be canceled
@@ -141,15 +141,15 @@ async def test_multiple_cancellations_with_waitlist(session):
         confirmed == expected_remaining_confirmed and 
         pending == expected_pending and 
         waitlisted == expected_waitlisted):
-        print("✅ Multiple cancellations with waitlist handled correctly!")
+        print("[PASS] Multiple cancellations with waitlist handled correctly!")
         print(f"   - {canceled} bookings canceled")
         print(f"   - {confirmed} booking remains confirmed")
         print(f"   - {pending} waitlisted users promoted to confirmation pending")
-        print("📝 Note: Users now have 20 seconds to confirm their promoted bookings")
+        print("Note: Users now have 20 seconds to confirm their promoted bookings")
         
         # Let's observe what happens to the confirmation pending bookings
-        print("\n🔍 Observing confirmation pending behavior...")
-        print("⏰ Waiting to see if users confirm their bookings or timeout...")
+        print("\nObserving confirmation pending behavior...")
+        print("Waiting to see if users confirm their bookings or timeout...")
         
         # Wait and check periodically
         for i in range(4):  # Check every 5 seconds for 20 seconds
@@ -158,10 +158,10 @@ async def test_multiple_cancellations_with_waitlist(session):
             confirmed, pending, waitlisted, canceled = count_booking_statuses(current_bookings)
             print(f"   After {(i+1)*5}s: confirmed={confirmed}, pending={pending}, waitlisted={waitlisted}, canceled={canceled}")
         
-        print(f"ℹ️ Conference '{conf_name}' will auto-cleanup in ~18 seconds")
+        print(f"Conference '{conf_name}' will auto-cleanup in ~18 seconds")
         return True
     else:
-        print("⚠️ State after cancellations is different than expected, but checking if it's reasonable...")
+        print("[WARN] State after cancellations is different than expected, but checking if it's reasonable...")
         
         # Alternative acceptable states (due to timing variations):
         # Some users might have already confirmed or timed out
@@ -169,21 +169,21 @@ async def test_multiple_cancellations_with_waitlist(session):
         if (canceled == expected_canceled and 
             total_active <= 3 and  # Can't exceed slot limit
             total_active >= 1):    # At least the original confirmed booking should remain
-            print("✅ Multiple cancellations handled reasonably (timing variations)")
+            print("[PASS] Multiple cancellations handled reasonably (timing variations)")
             print(f"   - Total active bookings: {total_active} (within slot limit of 3)")
             print(f"   - Canceled bookings: {canceled} (as expected)")
-            print(f"ℹ️ Conference '{conf_name}' will auto-cleanup in ~38 seconds")
+            print(f"Conference '{conf_name}' will auto-cleanup in ~38 seconds")
             return True
         else:
-            print("❌ Multiple cancellations test failed - unexpected final state")
+            print("[FAIL] Multiple cancellations test failed - unexpected final state")
             print(f"   Expected: canceled=2, total_active≤3, total_active≥1")
             print(f"   Actual: canceled={canceled}, total_active={total_active}")
             return False
 
 async def main():
-    print("🚀 Multiple Cancellations with Waitlist Test")
+    print("Multiple Cancellations with Waitlist Test")
     print("=" * 60)
-    print("📋 Test Scenario:")
+    print("Test Scenario:")
     print("   - Create conference with 3 slots")
     print("   - Book 5 users (3 confirmed, 2 waitlisted)")
     print("   - Cancel 2 confirmed bookings")
@@ -196,19 +196,19 @@ async def main():
         # Test server connectivity
         try:
             async with session.get(f"{BASE_URL}/conference/test/bookings") as resp:
-                print("✅ Server connectivity confirmed")
+                print("[PASS] Server connectivity confirmed")
         except Exception as e:
-            print(f"❌ Cannot connect to server: {e}")
-            print("💡 Make sure the conference server is running on localhost:8080")
+            print(f"[FAIL] Cannot connect to server: {e}")
+            print("Make sure the conference server is running on localhost:8080")
             return
         
         try:
             if await test_multiple_cancellations_with_waitlist(session):
-                print("\n🎉 TEST PASSED! Multiple cancellations with waitlist handled correctly.")
+                print("\nTEST PASSED! Multiple cancellations with waitlist handled correctly.")
             else:
-                print("\n❌ TEST FAILED! Check the behavior above.")
+                print("\n[FAIL] TEST FAILED! Check the behavior above.")
         except Exception as e:
-            print(f"\n❌ TEST ERROR: {e}")
+            print(f"\n[FAIL] TEST ERROR: {e}")
             import traceback
             traceback.print_exc()
 

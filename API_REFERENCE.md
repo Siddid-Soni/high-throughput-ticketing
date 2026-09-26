@@ -185,13 +185,13 @@ Retrieve detailed status of a specific booking.
 
 Confirm a booking that has been promoted from waitlist (status: ConfirmationPending).
 
-**⚠️ SECURITY**: Only the user who owns the booking can confirm it.
+**Security:** Only the user who owns the booking can confirm it.
 
 **Request Body:**
 ```json
 {
     "booking_id": 123,
-    "user_id": "user123"  // 🔒 REQUIRED: Must match the booking owner for security
+    "user_id": "user123"  // Must match the booking owner
 }
 ```
 

@@ -12,8 +12,6 @@ mod schema;
 mod queue;
 
 type DbPool = r2d2::Pool<r2d2::ConnectionManager<PgConnection>>;
-// Define DbError type for send + sync
-// type DbError = Box<dyn std::error::Error + Send + Sync>;
 
 #[derive(Debug, serde::Serialize)]
 struct Res {
@@ -44,7 +42,6 @@ async fn add_conference(
         return Ok(HttpResponse::BadRequest().json(Res { message: "location should be Alphanumeric String. Spaces are the only special character allowed".to_string() }));
     }
     
-    // Validate topics
     if form.topics.is_empty() {
         return Ok(HttpResponse::BadRequest().json(Res { message: "At least one topic is required".to_string() }));
     }
@@ -99,7 +96,6 @@ async fn add_conference(
         }
     })?;
 
-    // Schedule conference start event for queue cleanup
     let conference_name = conference.name.clone();
     let start_time_utc = DateTime::<Utc>::from_naive_utc_and_offset(start_time, Utc);
     let queue_service_clone = queue_service.clone();
@@ -179,32 +175,25 @@ async fn book_conference(
         move || {
             let mut conn = pool.get()?;
             
-            // Check if conference exists
             let conference = actions::get_conference_by_name(&mut conn, &form.name)?;
             
-            // Check if user exists
             let _user = actions::get_user_by_id(&mut conn, &form.user_id)?;
             
-            // Check if conference has started
             let now = Utc::now().naive_utc();
             if conference.start_timestamp <= now {
                 return Err("Cannot book conference that has already started".into());
             }
             
-            // Check for overlapping bookings
             if let Some(_) = actions::check_user_has_overlapping_booking(&mut conn, &form.user_id, conference.start_timestamp, conference.end_timestamp)? {
                 return Err("User has an overlapping conference booking".into());
             }
             
-            // Use atomic booking to prevent race conditions (includes duplicate check)
             let booking = actions::create_booking_atomic(&mut conn, conference.conference_id, &form.user_id)?;
             
-            // Store status for later use
             let booking_status = booking.status.clone();
             let booking_waitlist_position = booking.waitlist_position;
             let booking_id = booking.booking_id;
             
-            // If booking was confirmed, remove from overlapping waitlists
             if booking_status == models::BookingStatus::CONFIRMED {
                 actions::remove_from_overlapping_waitlists(
                     &mut conn,
@@ -234,9 +223,7 @@ async fn book_conference(
         error::InternalError::from_response(e, HttpResponse::BadRequest().json(Res { message: detail }))
     })?;
 
-    // If booking was waitlisted, add to queue
     if booking_result.status == models::BookingStatus::WAITLISTED {
-        // Use a separate task to avoid blocking the response
         let queue_service_clone = queue_service.clone();
         let booking_id = booking_result.booking_id;
         let conference_name = form.name.clone();
@@ -244,8 +231,7 @@ async fn book_conference(
         tokio::spawn(async move {
             if let Err(e) = queue_service_clone.add_to_waitlist_by_booking_id(booking_id, &conference_name).await {
                 log::error!("Failed to add booking {} to waitlist queue: {:?}", booking_id, e);
-                // Don't fail the booking - the database transaction succeeded
-                // The waitlist functionality will still work through database queries
+                // The booking is already committed; a queue failure must not fail the request
             }
         });
     }
@@ -316,20 +302,16 @@ async fn confirm_waitlist_booking(
         move || {
             let mut conn = pool.get()?;
             
-            // Get booking and conference info before confirmation
             let (_booking, conference_name) = actions::get_booking_with_conference_name(&mut conn, booking_id)?;
             let conference = actions::get_conference_by_name(&mut conn, &conference_name)?;
             
-            // Check if conference has started
             let now = Utc::now().naive_utc();
             if conference.start_timestamp <= now {
                 return Err("Cannot confirm booking for conference that has already started".into());
             }
             
-            // Use secure confirmation function that validates user ownership
             let confirmed_booking = actions::confirm_waitlist_booking_secure(&mut conn, booking_id, &user_id)?;
             
-            // Remove from overlapping waitlists
             actions::remove_from_overlapping_waitlists(
                 &mut conn,
                 &user_id,
@@ -366,11 +348,9 @@ async fn cancel_booking(
         move || {
             let mut conn = pool.get()?;
             
-            // Get booking info before cancellation
             let (booking, conference_name) = actions::get_booking_with_conference_name(&mut conn, booking_id)?;
             let was_confirmed = booking.status == models::BookingStatus::CONFIRMED;
             
-            // Cancel the booking
             let canceled_booking = actions::cancel_booking(&mut conn, booking_id)?;
             
             Ok((canceled_booking, conference_name, was_confirmed))
@@ -383,7 +363,6 @@ async fn cancel_booking(
         error::InternalError::from_response(e, HttpResponse::BadRequest().json(Res { message: detail }))
     })?;
 
-    // If a confirmed booking was canceled, notify waitlist
     if result.2 {
         let queue_service_clone = queue_service.clone();
         let conference_name = result.1.clone();
@@ -409,10 +388,8 @@ async fn get_conference_bookings(
     let result = web::block(move || {
         let mut conn = pool.get()?;
         
-        // Get conference to verify it exists
         let conference = actions::get_conference_by_name(&mut conn, &conference_name)?;
         
-        // Get all bookings for this conference
         use crate::schema::{bookings, users};
         let bookings_with_users: Vec<(models::Booking, Option<String>)> = bookings::table
             .filter(bookings::conference_id.eq(conference.conference_id))
@@ -472,17 +449,15 @@ async fn main() -> std::io::Result<()> {
     dotenvy::dotenv().ok();
     env_logger::init_from_env(env_logger::Env::new().default_filter_or("info"));
 
-    // initialize DB pool outside of `HttpServer::new` so that it is shared across all workers
+    // Created outside `HttpServer::new` so all workers share one pool
     let pool = initialize_db_pool();
     
-    // Initialize the waitlist queue service
     let mut queue_service = queue::WaitlistQueueService::new(pool.clone());
     queue_service.initialize().await.unwrap();
     
     // Add a small delay to ensure RabbitMQ setup is complete
     tokio::time::sleep(tokio::time::Duration::from_millis(500)).await;
     
-    // Start background queue consumers
     let queue_service_clone1 = queue_service.clone();
     tokio::spawn(async move {
         if let Err(e) = queue_service_clone1.start_consuming_expired_confirmations().await {
@@ -492,20 +467,17 @@ async fn main() -> std::io::Result<()> {
 
     let queue_service_clone2 = queue_service.clone();
     tokio::spawn(async move {
-        // Start conference consumers
         if let Err(e) = queue_service_clone2.start_consuming_conference_events().await {
             log::error!("Failed to start conference event consumers: {:?}", e);
         }
     });
     
-    // Create a shared reference to the queue service that can be used by request handlers
     let queue_service = web::Data::new(queue_service);
 
     log::info!("starting HTTP server at http://localhost:8080");
 
     let http = HttpServer::new(move || {
         App::new()
-            // add DB pool handle to app data; enables use of `web::Data<DbPool>` extractor
             .app_data(web::Data::new(pool.clone()))
             .app_data(queue_service.clone())
             .wrap(middleware::Logger::default())

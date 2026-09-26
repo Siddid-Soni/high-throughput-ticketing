@@ -60,14 +60,14 @@ def count_booking_statuses(bookings):
     return confirmed, pending, waitlisted, canceled
 
 def print_booking_state(bookings, title):
-    print(f"\n📊 {title}:")
+    print(f"\n{title}:")
     for user_id, booking_id, status in bookings:
         print(f"   - {user_id}: booking {booking_id} ({status})")
 
 # Test functions
 async def test_basic_functionality(session):
     """Test basic booking and cancellation"""
-    print("🧪 Testing basic functionality...")
+    print("Testing basic functionality...")
     timestamp = str(int(time.time()))
     conf_name = f"BasicTest{timestamp}"
     
@@ -81,23 +81,23 @@ async def test_basic_functionality(session):
     booking2_id, status2 = await book_conference(session, f"basic2{timestamp}", conf_name)
     
     if booking1_id and status1 == "CONFIRMED" and booking2_id and status2 == "CONFIRMED":
-        print("✅ Basic booking works")
+        print("[PASS] Basic booking works")
     else:
-        print("❌ Basic booking failed")
+        print("[FAIL] Basic booking failed")
         return False
     
     # Test cancellation
     if await cancel_booking(session, booking1_id):
-        print("✅ Booking cancellation works")
-        print(f"ℹ️ Conference '{conf_name}' will auto-cleanup in ~12 seconds")
+        print("[PASS] Booking cancellation works")
+        print(f"Conference '{conf_name}' will auto-cleanup in ~12 seconds")
         return True
     else:
-        print("❌ Booking cancellation failed")
+        print("[FAIL] Booking cancellation failed")
         return False
 
 async def test_waitlist_functionality(session):
     """Test waitlist creation and promotion"""
-    print("🧪 Testing waitlist functionality...")
+    print("Testing waitlist functionality...")
     timestamp = str(int(time.time()))
     conf_name = f"WaitlistTest{timestamp}"
     
@@ -116,9 +116,9 @@ async def test_waitlist_functionality(session):
     waitlisted_count = len([s for u, bid, s in bookings if s == "WAITLISTED"])
     
     if confirmed_count == 2 and waitlisted_count == 2:
-        print("✅ Waitlist creation works")
+        print("[PASS] Waitlist creation works")
     else:
-        print("❌ Waitlist creation failed")
+        print("[FAIL] Waitlist creation failed")
         return False
     
     # Test waitlist promotion
@@ -130,16 +130,16 @@ async def test_waitlist_functionality(session):
         confirmed, pending, waitlisted, canceled = count_booking_statuses(current_bookings)
         
         if pending >= 1:  # Someone should be promoted
-            print("✅ Waitlist promotion works")
-            print(f"ℹ️ Conference '{conf_name}' will auto-cleanup in ~12 seconds")
+            print("[PASS] Waitlist promotion works")
+            print(f"Conference '{conf_name}' will auto-cleanup in ~12 seconds")
             return True
     
-    print("❌ Waitlist promotion failed")
+    print("[FAIL] Waitlist promotion failed")
     return False
 
 async def test_security_authorization(session):
     """Test booking confirmation security"""
-    print("🧪 Testing security authorization...")
+    print("Testing security authorization...")
     timestamp = str(int(time.time()))
     conf_name = f"SecurityTest{timestamp}"
     
@@ -160,24 +160,24 @@ async def test_security_authorization(session):
     # Try unauthorized confirmation
     status, response = await confirm_booking(session, booking2_id, f"hacker{timestamp}")
     if status == 400 and "Access denied" in response:
-        print("✅ Unauthorized confirmation blocked")
+        print("[PASS] Unauthorized confirmation blocked")
     else:
-        print("❌ Security vulnerability: unauthorized confirmation allowed")
+        print("[FAIL] Security vulnerability: unauthorized confirmation allowed")
         return False
     
     # Try authorized confirmation
     status, response = await confirm_booking(session, booking2_id, f"secure2{timestamp}")
     if status == 200:
-        print("✅ Authorized confirmation works")
-        print(f"ℹ️ Conference '{conf_name}' will auto-cleanup in ~12 seconds")
+        print("[PASS] Authorized confirmation works")
+        print(f"Conference '{conf_name}' will auto-cleanup in ~12 seconds")
         return True
     else:
-        print("❌ Authorized confirmation failed")
+        print("[FAIL] Authorized confirmation failed")
         return False
 
 async def test_waitlist_bypass_protection(session):
     """Test that users can't bypass waitlist when slots are reserved"""
-    print("🧪 Testing waitlist bypass protection...")
+    print("Testing waitlist bypass protection...")
     timestamp = str(int(time.time()))
     conf_name = f"BypassTest{timestamp}"
     
@@ -201,16 +201,16 @@ async def test_waitlist_bypass_protection(session):
     booking4_id, status4 = await book_conference(session, f"bypass3{timestamp}", conf_name)
     
     if status4 == "WAITLISTED":
-        print("✅ Waitlist bypass protection works")
-        print(f"ℹ️ Conference '{conf_name}' will auto-cleanup in ~12 seconds")
+        print("[PASS] Waitlist bypass protection works")
+        print(f"Conference '{conf_name}' will auto-cleanup in ~12 seconds")
         return True
     else:
-        print("❌ Security vulnerability: waitlist bypass allowed")
+        print("[FAIL] Security vulnerability: waitlist bypass allowed")
         return False
 
 async def test_concurrent_operations(session):
     """Test concurrent booking and cancellation handling"""
-    print("🧪 Testing concurrent operations...")
+    print("Testing concurrent operations...")
     timestamp = str(int(time.time()))
     conf_name = f"ConcurrentTest{timestamp}"
     
@@ -229,9 +229,9 @@ async def test_concurrent_operations(session):
     waitlisted_count = len([s for u, bid, s in bookings if s == "WAITLISTED"])
     
     if confirmed_count == 3 and waitlisted_count == 4:
-        print("✅ Concurrent booking works correctly")
+        print("[PASS] Concurrent booking works correctly")
     else:
-        print("❌ Concurrent booking race condition detected")
+        print("[FAIL] Concurrent booking race condition detected")
         return False
     
     # Test concurrent cancellation
@@ -247,16 +247,16 @@ async def test_concurrent_operations(session):
         
         # Each cancellation should promote exactly one person
         if pending >= 1:
-            print("✅ Concurrent cancellation works correctly")
-            print(f"ℹ️ Conference '{conf_name}' will auto-cleanup in ~12 seconds")
+            print("[PASS] Concurrent cancellation works correctly")
+            print(f"Conference '{conf_name}' will auto-cleanup in ~12 seconds")
             return True
     
-    print("❌ Concurrent cancellation failed")
+    print("[FAIL] Concurrent cancellation failed")
     return False
 
 async def test_multiple_cancellations(session):
     """Test what happens with multiple cancellations"""
-    print("🧪 Testing multiple cancellations...")
+    print("Testing multiple cancellations...")
     timestamp = str(int(time.time()))
     conf_name = f"MultiCancelTest{timestamp}"
     
@@ -276,44 +276,44 @@ async def test_multiple_cancellations(session):
     
     if len(confirmed_bookings) >= 3:
         # Cancel all 3 confirmed bookings simultaneously
-        print("📋 Canceling 3 confirmed bookings simultaneously...")
+        print("Canceling 3 confirmed bookings simultaneously...")
         start_time = time.time()
         
         cancel_tasks = [cancel_booking(session, bid) for bid in confirmed_bookings]
         await asyncio.gather(*cancel_tasks)
         
         end_time = time.time()
-        print(f"⚡ All cancellations completed in {(end_time - start_time) * 1000:.1f}ms")
+        print(f"All cancellations completed in {(end_time - start_time) * 1000:.1f}ms")
         
         await asyncio.sleep(3)  # Increased wait time for queue processing
         
         current_bookings = await get_conference_bookings(session, conf_name)
         confirmed, pending, waitlisted, canceled = count_booking_statuses(current_bookings)
         
-        print(f"📊 After cancellations: confirmed={confirmed}, pending={pending}, waitlisted={waitlisted}, canceled={canceled}")
+        print(f"After cancellations: confirmed={confirmed}, pending={pending}, waitlisted={waitlisted}, canceled={canceled}")
         
         # More flexible success criteria:
         # Should have some promotions (pending >= 1) and remaining waitlisted users
         # The exact number can vary due to sequential processing timing
         if pending >= 1 and (pending + waitlisted) >= 2:
-            print("✅ Multiple cancellations handled correctly (sequential promotion)")
-            print(f"ℹ️ Conference '{conf_name}' will auto-cleanup in ~9 seconds")
+            print("[PASS] Multiple cancellations handled correctly (sequential promotion)")
+            print(f"Conference '{conf_name}' will auto-cleanup in ~9 seconds")
             return True
         elif pending == 0 and waitlisted >= 3:
-            print("✅ Multiple cancellations handled correctly (all still waitlisted)")
-            print(f"ℹ️ Conference '{conf_name}' will auto-cleanup in ~9 seconds")
+            print("[PASS] Multiple cancellations handled correctly (all still waitlisted)")
+            print(f"Conference '{conf_name}' will auto-cleanup in ~9 seconds")
             return True
         else:
-            print("⚠️ Unexpected state after multiple cancellations - but system is stable")
-            print(f"ℹ️ Conference '{conf_name}' will auto-cleanup in ~9 seconds")
+            print("[WARN] Unexpected state after multiple cancellations - but system is stable")
+            print(f"Conference '{conf_name}' will auto-cleanup in ~9 seconds")
             return True  # Don't fail for timing variations
     
-    print("❌ Multiple cancellations test failed - insufficient confirmed bookings")
+    print("[FAIL] Multiple cancellations test failed - insufficient confirmed bookings")
     return False
 
 async def test_confirmation_expiration(session):
     """Test confirmation timeout and cycling"""
-    print("🧪 Testing confirmation expiration...")
+    print("Testing confirmation expiration...")
     timestamp = str(int(time.time()))
     conf_name = f"ExpirationTest{timestamp}"
     
@@ -331,7 +331,7 @@ async def test_confirmation_expiration(session):
     await cancel_booking(session, booking1_id)
     await asyncio.sleep(1)
     
-    print("⏰ Waiting 11 seconds for confirmation expiration...")
+    print("Waiting 11 seconds for confirmation expiration...")
     await asyncio.sleep(11)  # Wait for expiration and cycling
     
     current_bookings = await get_conference_bookings(session, conf_name)
@@ -339,16 +339,16 @@ async def test_confirmation_expiration(session):
     
     # System should cycle and promote next person
     if pending >= 1 or confirmed >= 1:
-        print("✅ Confirmation expiration and cycling works")
-        print(f"ℹ️ Conference '{conf_name}' will auto-cleanup in ~12 seconds")
+        print("[PASS] Confirmation expiration and cycling works")
+        print(f"Conference '{conf_name}' will auto-cleanup in ~12 seconds")
         return True
     else:
-        print("❌ Confirmation expiration test failed")
+        print("[FAIL] Confirmation expiration test failed")
         return False
 
 async def test_timer_queue_cleanup(session):
     """Test timer message cleanup when conference starts"""
-    print("🧪 Testing timer queue cleanup...")
+    print("Testing timer queue cleanup...")
     timestamp = str(int(time.time()))
     conf_name = f"TimerTest{timestamp}"
     
@@ -365,7 +365,7 @@ async def test_timer_queue_cleanup(session):
         "topics": ["testing"]
     }) as resp:
         if resp.status != 201:
-            print("❌ Failed to create test conference")
+            print("[FAIL] Failed to create test conference")
             return False
     
     # Create users and bookings
@@ -389,11 +389,11 @@ async def test_timer_queue_cleanup(session):
     
     # Verify we have the expected initial state
     if pending_before == 0 and waitlisted_before == 0:
-        print("⚠️ No pending or waitlisted bookings to test cleanup - skipping test")
+        print("[WARN] No pending or waitlisted bookings to test cleanup - skipping test")
         return True  # Consider this a pass since there's nothing to clean up
     
     # Wait for conference to start (increased timeout)
-    print("⏰ Waiting 32 seconds for conference to start and cleanup...")
+    print("Waiting 32 seconds for conference to start and cleanup...")
     await asyncio.sleep(32)  # Extra 2 seconds buffer
     
     # Check state after conference start  
@@ -405,21 +405,21 @@ async def test_timer_queue_cleanup(session):
     # More flexible success criteria
     # Success if either: all non-confirmed bookings are canceled OR no change (meaning conference didn't start yet)
     if (pending == 0 and waitlisted == 0 and canceled >= pending_before + waitlisted_before):
-        print("✅ Timer queue cleanup works correctly")
+        print("[PASS] Timer queue cleanup works correctly")
         return True
     elif (pending == pending_before and waitlisted == waitlisted_before):
-        print("⚠️ Conference start event didn't trigger in time, but this is not a system failure")
-        print("ℹ️ This could be due to TTL timing variations - the cleanup logic itself is correct")
+        print("[WARN] Conference start event didn't trigger in time, but this is not a system failure")
+        print("This could be due to TTL timing variations - the cleanup logic itself is correct")
         return True  # Don't fail the test for timing issues
     else:
-        print("❌ Timer queue cleanup failed")
+        print("[FAIL] Timer queue cleanup failed")
         print(f"   Expected: pending=0, waitlisted=0, canceled>={pending_before + waitlisted_before}")
         print(f"   Actual: pending={pending}, waitlisted={waitlisted}, canceled={canceled}")
         return False
 
 async def test_edge_cases(session):
     """Test various edge cases"""
-    print("🧪 Testing edge cases...")
+    print("Testing edge cases...")
     timestamp = str(int(time.time()))
     conf_name = f"EdgeTest{timestamp}"
     
@@ -433,41 +433,41 @@ async def test_edge_cases(session):
     booking1b_id, status1b = await book_conference(session, f"edge0{timestamp}", conf_name)
     
     if booking1_id and not booking1b_id:
-        print("✅ Double booking prevention works")
+        print("[PASS] Double booking prevention works")
     else:
-        print("❌ Double booking prevention failed")
+        print("[FAIL] Double booking prevention failed")
         return False
     
     # Test booking non-existent conference
     booking_invalid, status_invalid = await book_conference(session, f"edge1{timestamp}", "NonExistentConf")
     if not booking_invalid:
-        print("✅ Non-existent conference booking prevention works")
-        print(f"ℹ️ Conference '{conf_name}' will auto-cleanup in ~12 seconds")
+        print("[PASS] Non-existent conference booking prevention works")
+        print(f"Conference '{conf_name}' will auto-cleanup in ~12 seconds")
         return True
     else:
-        print("❌ Non-existent conference booking allowed")
+        print("[FAIL] Non-existent conference booking allowed")
         return False
 
 async def test_additional_edge_cases(session):
     """Test additional comprehensive edge cases"""
-    print("🧪 Testing additional edge cases...")
+    print("Testing additional edge cases...")
     timestamp = str(int(time.time()))
     
     # Test 1: Zero slot conference
-    print("🔍 Testing zero slot conference...")
+    print("Testing zero slot conference...")
     zero_conf = f"ZeroSlot{timestamp}"
     await create_conference(session, zero_conf, slots=0, seconds_ahead=15)
     await create_user(session, f"zero{timestamp}")
     
     booking_id, status = await book_conference(session, f"zero{timestamp}", zero_conf)
     if status == "WAITLISTED" or booking_id is None:
-        print("✅ Zero slot conference handled correctly")
+        print("[PASS] Zero slot conference handled correctly")
     else:
-        print("❌ Zero slot conference booking should be impossible")
+        print("[FAIL] Zero slot conference booking should be impossible")
         return False
     
     # Test 2: Conference that has already started
-    print("🔍 Testing past conference booking...")
+    print("Testing past conference booking...")
     past_conf = f"PastConf{timestamp}"
     past_start = (datetime.utcnow() - timedelta(hours=1)).strftime('%Y-%m-%d %H:%M:%S')
     past_end = (datetime.utcnow() - timedelta(minutes=30)).strftime('%Y-%m-%d %H:%M:%S')
@@ -483,15 +483,15 @@ async def test_additional_edge_cases(session):
         if resp.status == 201:
             booking_id, status = await book_conference(session, f"zero{timestamp}", past_conf)
             if booking_id is None:
-                print("✅ Past conference booking prevention works")
+                print("[PASS] Past conference booking prevention works")
             else:
-                print("❌ Past conference booking should be prevented")
+                print("[FAIL] Past conference booking should be prevented")
                 return False
         else:
-            print("✅ Past conference creation prevented")
+            print("[PASS] Past conference creation prevented")
     
     # Test 3: Massive waitlist stress test
-    print("🔍 Testing large waitlist handling...")
+    print("Testing large waitlist handling...")
     large_conf = f"LargeTest{timestamp}"
     await create_conference(session, large_conf, slots=1, seconds_ahead=20)
     
@@ -508,13 +508,13 @@ async def test_additional_edge_cases(session):
     waitlisted_bookings = [r for r in results if r[1] == "WAITLISTED"]
     
     if len(confirmed_bookings) == 1 and len(waitlisted_bookings) == 19:
-        print("✅ Large waitlist stress test passed")
+        print("[PASS] Large waitlist stress test passed")
     else:
-        print(f"⚠️ Large waitlist: {len(confirmed_bookings)} confirmed, {len(waitlisted_bookings)} waitlisted")
-        print("✅ System handled stress test (minor timing variations acceptable)")
+        print(f"[WARN] Large waitlist: {len(confirmed_bookings)} confirmed, {len(waitlisted_bookings)} waitlisted")
+        print("[PASS] System handled stress test (minor timing variations acceptable)")
     
     # Test 4: Invalid user IDs and conference names
-    print("🔍 Testing invalid input handling...")
+    print("Testing invalid input handling...")
     
     # Invalid user ID (special characters)
     invalid_users = ["user@123", "user space", "user-dash", "user.dot", ""]
@@ -526,29 +526,29 @@ async def test_additional_edge_cases(session):
             valid_invalid_count += 1
     
     if valid_invalid_count >= 3:  # Most should fail
-        print("✅ Invalid user ID handling works")
+        print("[PASS] Invalid user ID handling works")
     else:
-        print("⚠️ Some invalid user IDs were accepted")
+        print("[WARN] Some invalid user IDs were accepted")
     
     # Test 5: Confirm non-existent booking
-    print("🔍 Testing invalid booking operations...")
+    print("Testing invalid booking operations...")
     status, response = await confirm_booking(session, 999999, f"zero{timestamp}")
     if status != 200:
-        print("✅ Non-existent booking confirmation prevention works")
+        print("[PASS] Non-existent booking confirmation prevention works")
     else:
-        print("❌ Non-existent booking confirmation should fail")
+        print("[FAIL] Non-existent booking confirmation should fail")
         return False
     
     # Test 6: Cancel non-existent booking
     cancel_result = await cancel_booking(session, 999999)
     if not cancel_result:
-        print("✅ Non-existent booking cancellation prevention works")
+        print("[PASS] Non-existent booking cancellation prevention works")
     else:
-        print("❌ Non-existent booking cancellation should fail")
+        print("[FAIL] Non-existent booking cancellation should fail")
         return False
     
     # Test 7: Rapid booking/canceling cycle
-    print("🔍 Testing rapid booking/canceling cycle...")
+    print("Testing rapid booking/canceling cycle...")
     cycle_conf = f"CycleTest{timestamp}"
     await create_conference(session, cycle_conf, slots=1, seconds_ahead=25)
     
@@ -580,10 +580,10 @@ async def test_additional_edge_cases(session):
                 if confirm_status == 200:
                     bookings = [(u, bid, "CONFIRMED" if bid == pending_booking[1] else s) for u, bid, s in bookings]
     
-    print("✅ Rapid booking/canceling cycle completed")
+    print("[PASS] Rapid booking/canceling cycle completed")
     
     # Test 8: Conference with maximum slots
-    print("🔍 Testing maximum slot conference...")
+    print("Testing maximum slot conference...")
     max_conf = f"MaxTest{timestamp}"
     await create_conference(session, max_conf, slots=100, seconds_ahead=20)
     
@@ -597,16 +597,16 @@ async def test_additional_edge_cases(session):
     
     max_confirmed = len([r for r in max_results if r[1] == "CONFIRMED"])
     if max_confirmed >= 45:  # Should confirm most/all
-        print("✅ High-capacity conference handling works")
+        print("[PASS] High-capacity conference handling works")
     else:
-        print(f"⚠️ High-capacity conference: {max_confirmed}/50 confirmed")
+        print(f"[WARN] High-capacity conference: {max_confirmed}/50 confirmed")
     
-    print(f"ℹ️ All test conferences will auto-cleanup in 15-25 seconds")
+    print(f"All test conferences will auto-cleanup in 15-25 seconds")
     return True
 
 # Main test runner
 async def main():
-    print("🚀 Complete Conference Booking System Test Suite")
+    print("Complete Conference Booking System Test Suite")
     print("=" * 70)
     
     timeout = aiohttp.ClientTimeout(total=30)
@@ -614,9 +614,9 @@ async def main():
         # Test server connectivity
         try:
             async with session.get(f"{BASE_URL}/conference/test/bookings") as resp:
-                print("✅ Server connectivity confirmed")
+                print("[PASS] Server connectivity confirmed")
         except Exception as e:
-            print(f"❌ Cannot connect to server: {e}")
+            print(f"[FAIL] Cannot connect to server: {e}")
             return
         
         tests = [
@@ -636,26 +636,26 @@ async def main():
         total = len(tests)
         
         for test_name, test_func in tests:
-            print(f"\n🔍 Running: {test_name}")
+            print(f"\nRunning: {test_name}")
             try:
                 if await test_func(session):
                     passed += 1
-                    print(f"✅ {test_name} PASSED")
+                    print(f"[PASS] {test_name} PASSED")
                 else:
-                    print(f"❌ {test_name} FAILED")
+                    print(f"[FAIL] {test_name} FAILED")
             except Exception as e:
-                print(f"❌ {test_name} ERROR: {e}")
+                print(f"[FAIL] {test_name} ERROR: {e}")
             
             # Small delay between tests
             await asyncio.sleep(0.5)
         
         print("\n" + "=" * 70)
-        print(f"🏁 Test Results: {passed}/{total} tests passed ({(passed/total)*100:.1f}%)")
+        print(f"Test Results: {passed}/{total} tests passed ({(passed/total)*100:.1f}%)")
         
         if passed == total:
-            print("🎉 ALL TESTS PASSED! System is working correctly.")
+            print("ALL TESTS PASSED! System is working correctly.")
         else:
-            print("⚠️  Some tests failed. Review the issues above.")
+            print("[WARN]  Some tests failed. Review the issues above.")
 
 if __name__ == "__main__":
     asyncio.run(main()) 
