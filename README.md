@@ -1,73 +1,60 @@
-# Conference Waitlist API
+# Ticketing API
 
-A conference booking service with waitlist management, built with Rust (Actix-Web, Diesel), PostgreSQL, and RabbitMQ.
+A ticket sales service for high-traffic on-sales, built with Rust (Actix-Web, Diesel), PostgreSQL, Redis, and Kafka. Users wait in a queue, are let in so that a fixed number shop at once, hold seats for a limited time, and confirm them by paying.
 
-## Overview
+The service is being rebuilt; see [ROADMAP.md](ROADMAP.md) for the architecture and [STEPS.md](STEPS.md) for progress. Implemented so far: venues, events and their seat maps, registration and login, and joining the waiting room and checking your place in it. Admission, reservations and payment are not built yet.
 
-- Users register with a set of interest topics; conferences are created with a fixed number of slots.
-- A booking is confirmed immediately when a slot is free and no one is waiting; otherwise it joins a FIFO waitlist.
-- When a confirmed booking is canceled, the next waitlisted booking is promoted to `ConfirmationPending` and must be confirmed by its owner within 20 seconds. An unconfirmed promotion returns to the end of the waitlist and the next booking is promoted.
-- When a conference starts, all remaining waitlisted and pending bookings are canceled.
+## Components
 
-PostgreSQL is the source of truth for booking state. RabbitMQ is used for delayed events, implemented as TTL queues that dead-letter into consumer queues:
-
-| Timer queue               | Dead-letters to        | Handler                                  |
-|---------------------------|------------------------|------------------------------------------|
-| `confirmation.timer`      | `confirmation.expired` | Expire a pending confirmation, promote next |
-| `conference.start.timer`  | `conference.starts`    | Cancel open waitlist entries at start    |
-
-## Booking States
-
-```
-WAITLISTED -> ConfirmationPending -> CONFIRMED
-     ^                |
-     +---- timeout ---+
-Any active state -> CANCELED
-```
-
-## API
-
-| Method | Path                                 | Description                         |
-|--------|--------------------------------------|-------------------------------------|
-| POST   | `/user`                              | Register a user with topics         |
-| POST   | `/conference`                        | Create a conference                 |
-| POST   | `/book`                              | Book a conference or join waitlist  |
-| GET    | `/booking/{id}`                      | Booking status                      |
-| POST   | `/confirm`                           | Confirm a promoted booking (owner only) |
-| POST   | `/cancel`                            | Cancel a booking                    |
-| GET    | `/conference/{name}/bookings`        | List bookings for a conference      |
-
-Request and response formats are documented in [API_REFERENCE.md](API_REFERENCE.md).
+| Component  | Role                                                                 |
+|------------|----------------------------------------------------------------------|
+| PostgreSQL | Durable record: users, venues, seats, events, bookings, payment inbox |
+| Redis      | Tokens, seat map, active holds, hold expiry queue (AOF enabled)      |
+| Kafka      | Ordered waiting room log, one topic per event                        |
 
 ## Running
 
 Requirements: Rust (stable), Docker, `diesel_cli` with the PostgreSQL feature.
 
 ```bash
-docker-compose up -d
+docker compose up -d
 diesel migration run
 cargo run
 ```
 
-The server listens on `127.0.0.1:8080`. `DATABASE_URL` is read from `.env`. RabbitMQ is expected at `localhost:5672` with the default `guest` credentials.
+The server listens on `127.0.0.1:8080`. Configuration is read from the environment, with `.env` as a fallback; `DATABASE_URL` and `JWT_SECRET` are required.
 
-## Tests
-
-The integration tests run against a live server:
-
-```bash
-pip install -r requirements.txt
-python3 all_tests.py
-python3 test_multiple_cancellations_waitlist.py
-```
+| Variable                 | Default                   |
+|--------------------------|---------------------------|
+| `DATABASE_URL`           | required                  |
+| `JWT_SECRET`             | required                  |
+| `REDIS_URL`              | `redis://127.0.0.1:6379`  |
+| `KAFKA_BROKERS`          | `localhost:9092`          |
+| `DB_POOL_SIZE`           | `10`                      |
+| `MAX_ACTIVE_TOKENS`      | `2000`                    |
+| `TOKEN_TTL_SECS`         | `600`                     |
+| `HOLD_TTL_SECS`          | `300`                     |
+| `PAYMENT_EXTENSION_SECS` | `120`                     |
+| `MAX_SEATS_PER_USER`     | `4`                       |
+| `JWT_TTL_SECS`           | `3600`                    |
 
 ## Project Layout
 
 ```
-src/main.rs      HTTP handlers and server setup
-src/actions.rs   Database operations
-src/queue.rs     RabbitMQ setup, publishers, and consumers
-src/models.rs    Database and API types
-src/schema.rs    Diesel schema
-migrations/      Database migrations
+src/main.rs          API server startup
+src/lib.rs           Shared library used by the server and the workers in src/bin/
+src/config.rs        Environment configuration
+src/db.rs            PostgreSQL connection pool
+src/cache.rs         Redis connection and per-event keys (seat bitmap, counters)
+src/error.rs         ApiError: maps errors to JSON responses with status codes
+src/auth.rs          Password hashing (Argon2id) and JWT issuing/validation
+src/models.rs        Diesel models and enums
+src/waiting.rs       WaitingQueue trait and its Kafka implementation
+src/schema.rs        Diesel schema (generated)
+src/actions/<area>.rs  Database operations, one file per area (users, venues, events,
+                     bookings, payments); synchronous, take &mut PgConnection
+src/api/mod.rs       Mounts every route group
+src/api/<group>.rs   One file per route group (auth, venues, events, waiting_room,
+                     reservations, payments), each exposing `configure`
+migrations/          Database migrations
 ```
