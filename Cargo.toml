@@ -13,6 +13,7 @@ argon2 = "0.6"
 jsonwebtoken = { version = "11.1", default-features = false, features = ["rust_crypto"] }
 kafkit-client = "=0.1.9"
 diesel = { version = "2.0", features = ["postgres", "chrono", "r2d2", "uuid", "serde_json"] }
+diesel_migrations = { version = "2", features = ["postgres"] }
 diesel-derive-enum = { version = "2.1", features = ["postgres"] }
 dotenvy = "0.15"
 r2d2 = "0.8"

@@ -2,8 +2,13 @@
 //! waiting queue (`lobby.rs`), then reads the queue in order and makes each
 //! queued token ACTIVE once there is room for another shopper.
 //!
-//! Usage: `cargo run --bin admission_worker -- <event_id>`
+//! Usage: `cargo run --bin admission_worker -- [event_id]`. With an event id
+//! it runs that event and exits when its sale closes. Without one it finds
+//! the scheduled and on-sale events every few seconds and runs each in its
+//! own task, restarting any that fails. Several workers can run either way:
+//! Kafka gives each event's partition to one of them, the others stand by.
 
+use std::collections::HashMap;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
@@ -20,6 +25,7 @@ use conference::{
     actions,
     cache::{self, AdmitOutcome, RedisConn},
     config::Config,
+    models::Event,
     waiting::{topic_name, KafkaQueue, SharedQueue},
 };
 
@@ -33,51 +39,117 @@ const ERROR_RETRY: Duration = Duration::from_secs(1);
 const SAMPLE_EVERY: Duration = Duration::from_secs(5);
 // How often the worker checks whether the sale has been closed
 const CLOSE_CHECK: Duration = Duration::from_secs(1);
+// How often the supervisor looks for events to run
+const DISCOVER_EVERY: Duration = Duration::from_secs(10);
 
 type BoxError = Box<dyn std::error::Error + Send + Sync>;
+
+/// Connections shared by every event this process runs
+struct Shared {
+    config: Config,
+    redis: RedisConn,
+    queue: SharedQueue,
+}
 
 #[tokio::main]
 async fn main() {
     env_logger::init_from_env(env_logger::Env::new().default_filter_or("info"));
 
-    let event_id: i32 = std::env::args()
-        .nth(1)
-        .and_then(|arg| arg.parse().ok())
-        .expect("usage: admission_worker <event_id>");
+    let event_id: Option<i32> =
+        std::env::args().nth(1).map(|arg| arg.parse().expect("usage: admission_worker [event_id]"));
     let config = Config::from_env();
-    let mut redis = cache::connect(&config).await;
+    let redis = cache::connect(&config).await;
+    let queue: SharedQueue = Arc::new(KafkaQueue::connect(&config).await.expect("Kafka should be reachable at KAFKA_BROKERS"));
+    let shared = Arc::new(Shared { config, redis, queue });
 
-    let event = {
-        let database_url = config.database_url.clone();
-        tokio::task::spawn_blocking(move || {
-            let mut conn = PgConnection::establish(&database_url).expect("DATABASE_URL should be reachable");
-            actions::events::find_event(&mut conn, event_id)
-        })
-        .await
-        .expect("event lookup task")
-        .unwrap_or_else(|e| panic!("load event {event_id}: {e}"))
-    };
+    match event_id {
+        Some(event_id) => {
+            let event = with_db(&shared.config, move |conn| Ok(actions::events::find_event(conn, event_id)?))
+                .await
+                .unwrap_or_else(|e| panic!("load event {event_id}: {e}"));
+            if let Err(e) = run_event(shared, event).await {
+                log::error!("Event {event_id}: {e}");
+                std::process::exit(1);
+            }
+        }
+        None => supervise(shared).await,
+    }
+}
+
+/// Runs a blocking Postgres operation on its own connection
+async fn with_db<T: Send + 'static>(
+    config: &Config,
+    f: impl FnOnce(&mut PgConnection) -> Result<T, BoxError> + Send + 'static,
+) -> Result<T, BoxError> {
+    let database_url = config.database_url.clone();
+    tokio::task::spawn_blocking(move || f(&mut PgConnection::establish(&database_url)?)).await?
+}
+
+/// Keeps one task running per scheduled or on-sale event
+async fn supervise(shared: Arc<Shared>) {
+    log::info!("Running every scheduled and on-sale event");
+    let mut running: HashMap<i32, tokio::task::JoinHandle<()>> = HashMap::new();
+    let mut ticker = tokio::time::interval(DISCOVER_EVERY);
+    loop {
+        tokio::select! {
+            _ = ticker.tick() => {}
+            _ = tokio::signal::ctrl_c() => break,
+        }
+        // Finished tasks leave: closed events stay out, failed ones start again
+        running.retain(|_, task| !task.is_finished());
+        let events = match with_db(&shared.config, |conn| Ok(actions::events::live_events(conn)?)).await {
+            Ok(events) => events,
+            Err(e) => {
+                log::error!("Listing events failed: {e}");
+                continue;
+            }
+        };
+        for event in events {
+            if running.contains_key(&event.id) || !matches!(event.status.as_str(), "SCHEDULED" | "ON_SALE") {
+                continue;
+            }
+            let (shared, id) = (shared.clone(), event.id);
+            running.insert(
+                id,
+                tokio::spawn(async move {
+                    if let Err(e) = run_event(shared, event).await {
+                        log::error!("Event {id}: {e}; retrying shortly");
+                    }
+                }),
+            );
+        }
+    }
+    log::info!("Shutting down");
+    // Each event task stops on Ctrl-C too, leaving its consumer group
+    for (_, task) in running {
+        let _ = task.await;
+    }
+}
+
+/// Runs one event until its sale closes (or Ctrl-C)
+async fn run_event(shared: Arc<Shared>, event: Event) -> Result<(), BoxError> {
+    let event_id = event.id;
     if event.status == "CLOSED" || event.status == "CANCELED" {
         log::info!("Event {event_id} is {}; nothing to admit", event.status);
-        return;
+        return Ok(());
     }
-
-    let queue: SharedQueue = Arc::new(KafkaQueue::connect(&config).await.expect("Kafka should be reachable at KAFKA_BROKERS"));
+    let config = &shared.config;
+    let mut redis = shared.redis.clone();
     // Subscribing needs the topic; event creation normally made it already
-    queue.ensure_event(event_id).await.expect("create the event's waiting queue");
+    shared.queue.ensure_event(event_id).await?;
 
     // The topic has one partition, so one worker in the group owns it and any
     // others wait as standbys. A worker that loses it drops the token it holds.
     let owns_partition = Arc::new(AtomicBool::new(false));
     let listener = {
         let owns_partition = owns_partition.clone();
-        ConsumerRebalanceListener::new(move |event| {
-            let owned = matches!(event, ConsumerRebalanceEvent::Assigned(_));
+        ConsumerRebalanceListener::new(move |rebalance| {
+            let owned = matches!(rebalance, ConsumerRebalanceEvent::Assigned(_));
             // An empty assignment is a no-op for a standby
-            if !event.partitions().is_empty() {
+            if !rebalance.partitions().is_empty() {
                 owns_partition.store(owned, Ordering::SeqCst);
             }
-            log::info!("Rebalance: {event:?}");
+            log::info!("Event {event_id}: rebalance {rebalance:?}");
         })
     };
 
@@ -89,40 +161,42 @@ async fn main() {
             .with_enable_auto_commit(false)
             .with_rebalance_listener(listener),
     )
-    .await
-    .expect("Kafka should be reachable at KAFKA_BROKERS");
-    consumer
-        .subscribe(vec![topic_name(event_id)])
-        .await
-        .expect("subscribe to the event's waiting queue");
+    .await?;
+    consumer.subscribe(vec![topic_name(event_id)]).await?;
     log::info!("Admitting tokens for event {event_id}");
 
     let start_time = event.start_time;
-    tokio::spawn(lobby::open_sale(
-        redis.clone(),
-        queue,
-        config.database_url.clone(),
-        event,
-        owns_partition.clone(),
-    ));
-    tokio::spawn(sample_admissions(redis.clone(), event_id, owns_partition.clone()));
+    let helpers = [
+        tokio::spawn(lobby::open_sale(
+            redis.clone(),
+            shared.queue.clone(),
+            config.database_url.clone(),
+            event,
+            owns_partition.clone(),
+        )),
+        tokio::spawn(sample_admissions(redis.clone(), event_id, owns_partition.clone())),
+    ];
 
     let mut close_redis = redis.clone();
     tokio::select! {
-        _ = run(&consumer, &mut redis, &config, event_id, &owns_partition) => {
+        _ = run(&consumer, &mut redis, config, event_id, &owns_partition) => {
             // Admission saw the flag first; make sure Postgres records the close too
             close_at(&mut close_redis, &config.database_url, event_id, start_time).await;
-            log::info!("The sale is closed; stopping")
+            log::info!("Event {event_id}: the sale is closed; stopping")
         }
         _ = close_at(&mut close_redis, &config.database_url, event_id, start_time) => {
-            log::info!("The sale is closed; stopping")
+            log::info!("Event {event_id}: the sale is closed; stopping")
         }
-        _ = tokio::signal::ctrl_c() => log::info!("Shutting down"),
+        _ = tokio::signal::ctrl_c() => log::info!("Event {event_id}: shutting down"),
+    }
+    for helper in helpers {
+        helper.abort();
     }
     // Leaving the group lets a standby worker take over without waiting for the session timeout
     if let Err(e) = consumer.shutdown().await {
-        log::warn!("Consumer shutdown: {e}");
+        log::warn!("Event {event_id}: consumer shutdown: {e}");
     }
+    Ok(())
 }
 
 /// Records admission progress every few seconds so the status endpoint can

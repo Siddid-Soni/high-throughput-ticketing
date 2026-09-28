@@ -24,10 +24,14 @@ services:
     environment:
       KAFKA_NODE_ID: 1
       KAFKA_PROCESS_ROLES: broker,controller
-      KAFKA_LISTENERS: PLAINTEXT://:9092,CONTROLLER://:9093
-      KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://localhost:9092
+      # PLAINTEXT for tools on the host (localhost:9092), INTERNAL for the
+      # app containers (kafka:29092): a client connects to the address the
+      # broker advertises, and localhost means something else in a container
+      KAFKA_LISTENERS: PLAINTEXT://:9092,INTERNAL://:29092,CONTROLLER://:9093
+      KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://localhost:9092,INTERNAL://kafka:29092
+      KAFKA_INTER_BROKER_LISTENER_NAME: INTERNAL
       KAFKA_CONTROLLER_LISTENER_NAMES: CONTROLLER
-      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: CONTROLLER:PLAINTEXT,PLAINTEXT:PLAINTEXT
+      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: CONTROLLER:PLAINTEXT,PLAINTEXT:PLAINTEXT,INTERNAL:PLAINTEXT
       KAFKA_CONTROLLER_QUORUM_VOTERS: 1@localhost:9093
       KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
       KAFKA_TRANSACTION_STATE_LOG_REPLICATION_FACTOR: 1
@@ -39,6 +43,56 @@ services:
       - 9092:9092
     volumes:
       - kafka_data:/var/lib/kafka/data
+
+  # The application: `docker compose --profile app up -d --build`. Without the
+  # profile only the services above start, for running the app with cargo.
+  api:
+    profiles: [app]
+    build: .
+    image: ampq-waitlist-app
+    command: ["conference"]
+    restart: unless-stopped
+    env_file: .env
+    environment: &app_env
+      DATABASE_URL: postgresql://actix:actix@postgres:5432/conferences
+      REDIS_URL: redis://redis:6379
+      KAFKA_BROKERS: kafka:29092
+      BIND_ADDR: 0.0.0.0:8080
+    ports:
+      - 8080:8080
+    depends_on: [postgres, redis, kafka]
+
+  # Runs every scheduled and on-sale event; more replicas stand by
+  admission-worker:
+    profiles: [app]
+    build: .
+    image: ampq-waitlist-app
+    command: ["admission_worker"]
+    restart: unless-stopped
+    env_file: .env
+    environment: *app_env
+    # Tables come from the API's migrations
+    depends_on: [api]
+
+  payment-worker:
+    profiles: [app]
+    build: .
+    image: ampq-waitlist-app
+    command: ["payment_worker"]
+    restart: unless-stopped
+    env_file: .env
+    environment: *app_env
+    depends_on: [api]
+
+  cleanup-worker:
+    profiles: [app]
+    build: .
+    image: ampq-waitlist-app
+    command: ["cleanup_worker"]
+    restart: unless-stopped
+    env_file: .env
+    environment: *app_env
+    depends_on: [api]
 
 volumes:
   redis_data:

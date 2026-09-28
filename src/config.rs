@@ -4,6 +4,8 @@ use std::str::FromStr;
 #[derive(Debug, Clone)]
 pub struct Config {
     pub database_url: String,
+    /// Where the API listens; `0.0.0.0:8080` in a container
+    pub bind_addr: String,
     pub redis_url: String,
     pub kafka_brokers: String,
     pub db_pool_size: u32,
@@ -27,6 +29,7 @@ impl Config {
 
         Self {
             database_url: required("DATABASE_URL"),
+            bind_addr: or_default("BIND_ADDR", "127.0.0.1:8080".to_string()),
             redis_url: or_default("REDIS_URL", "redis://127.0.0.1:6379".to_string()),
             kafka_brokers: or_default("KAFKA_BROKERS", "localhost:9092".to_string()),
             db_pool_size: or_default("DB_POOL_SIZE", 10),

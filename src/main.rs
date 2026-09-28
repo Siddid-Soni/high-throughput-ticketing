@@ -18,13 +18,15 @@ async fn main() -> std::io::Result<()> {
 
     // Created outside `HttpServer::new` so all workers share one pool
     let pool = db::init_pool(&config);
+    db::run_migrations(&pool);
     let redis = cache::connect(&config).await;
     let queue: SharedQueue = Arc::new(KafkaQueue::connect(&config).await.expect("Kafka should be reachable at KAFKA_BROKERS"));
     let queue = web::Data::new(queue);
     let provider = web::Data::new(payment::from_config(&config, pool.clone()));
     let config = web::Data::new(config);
 
-    log::info!("starting HTTP server at http://localhost:8080");
+    let bind_addr = config.bind_addr.clone();
+    log::info!("starting HTTP server at http://{bind_addr}");
 
     HttpServer::new(move || {
         App::new()
@@ -37,7 +39,7 @@ async fn main() -> std::io::Result<()> {
             .wrap(middleware::Logger::default())
             .configure(api::configure)
     })
-    .bind(("127.0.0.1", 8080))?
+    .bind(bind_addr)?
     .run()
     .await
 }

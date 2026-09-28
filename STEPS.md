@@ -370,10 +370,10 @@ A token's place in line is its **Kafka offset**: `seq = offset + 1`. The queue i
 
 ### 8.2 Split binaries
 - [x] Move shared code into a library crate (`src/lib.rs`). Done during Stage 1.
-- [ ] Binaries `api`, `admission-worker`, `cleanup-worker`, `payment-worker` each have their own `main`.
-- [ ] Add each to `docker-compose.yml`.
+- [x] Binaries `conference` (the API), `admission_worker`, `cleanup_worker`, `payment_worker` each have their own `main`. The admission worker without an event id runs every scheduled and on-sale event (one task each, found every 10 seconds, restarted if one fails), so one service covers events created later; with an id it runs just that one.
+- [x] Add each to `docker-compose.yml`, under the `app` profile and one image (`Dockerfile`, multi-stage release build): `docker compose --profile app up -d --build`. Without the profile only Postgres, Redis and Kafka start, for running the app with cargo. Kafka gained an `INTERNAL` listener (`kafka:29092`) for containers; `localhost:9092` stays for the host. The API runs the embedded migrations at startup (`diesel_migrations`) and listens on `BIND_ADDR`.
 
-**Check:** `docker compose up` starts all services; the full flow works end to end.
+**Check:** `docker compose --profile app up` starts all services; the full flow works end to end. (Verified: join before opening, admitted at opening by the containerized worker, reserve, pay, `CONFIRMED` by the payment worker; a fresh database is migrated by the API.)
 
 ### 8.3 Final load test
 - [ ] `load/final.js`: 10,000 users join an event with 100 seats; admitted users reserve a random free seat; 70% pay, 30% abandon.
