@@ -51,9 +51,17 @@ impl KafkaQueue {
         let producer = KafkaProducer::connect(
             ProducerConfig::new(config.kafka_brokers.as_str())
                 .with_client_id("waiting-room-api")
-                // Stored by every in-sync replica; retries cannot create duplicates
+                // Stored by every in-sync replica before a join is answered
                 .with_acks(-1)
-                .with_enable_idempotence(true),
+                // Not idempotent: kafkit-client 0.1.9's idempotent producer
+                // rejects its own batches (OutOfOrderSequenceNumber) once
+                // many sends are in flight, as in a join burst. Nothing needs
+                // it: a token's place in line comes from its own ack, and a
+                // duplicate left by a retry is skipped by admission.
+                .with_enable_idempotence(false)
+                // Concurrent joins share a produce request instead of each
+                // sending its own; costs at most this much when idle
+                .with_linger(std::time::Duration::from_millis(2)),
         )
         .await
         .map_err(|e| QueueError(format!("connect producer: {e}")))?;

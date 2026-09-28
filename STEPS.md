@@ -386,5 +386,11 @@ A token's place in line is its **Kafka offset**: `seq = offset + 1`. The queue i
 
 **Check:** all assertions pass; results recorded. Result (after the fix below): 100 sold to exactly the 100 buyers who paid, 50 abandoned holds resold, 9,850 turned away as sold out, no server errors; status served 3,800 req/s at p50 0.3 ms, p99 0.8 ms. The first 10,000-user run found a bug: status polls during the lobby shuffle republished tokens the worker had not published yet (15,340 messages for 10,000 users, one `500`, status p99 59 ms); lobby tokens are now marked `published = lobby` by `flush_lobby.lua` so the API leaves them to the worker.
 
+### 8.5 Capacity
+- [x] `load/capacity.sh USERS POLL_MS DURATION [APIS] [JOIN_SPREAD_MS]`: joins after the sale opened, then steady status polling; samples Redis, API and generator CPU; checks one Kafka message and one distinct place in line per join. The load generator gained a `poll` mode and round-robin over several API addresses.
+- [x] Found and fixed: kafkit-client's idempotent producer rejected its own batches under a join burst (idempotence off, 2 ms linger: join p50 98 ms to 3.6 ms), and a single Redis connection per API process became the bottleneck (`REDIS_CONNECTIONS`, 8).
+
+**Check:** find the ceiling. Result: about 30,000-37,000 status polls per second on one machine, set by Redis (one core near 500,000 commands per second); p99 ≤ 5 ms up to 20,000 users polling every second. Details and next steps in `load/RESULTS.md`.
+
 ### 8.4 Documentation
 - [x] Update `README.md` and `API_REFERENCE.md` for the new endpoints and services. (`API_REFERENCE.md` was rewritten from the handlers; the old one described the removed conference API.)

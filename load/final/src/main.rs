@@ -4,10 +4,15 @@
 //! faster). Then it pays (`PAY_RATIO` of users) or abandons the hold. Users
 //! give up once the status reports `sold_out`.
 //!
-//! Environment: BASE_URL, EVENT_ID, SEAT_COUNT, USER_IDS (a file of user ids,
-//! one per line), JWT_SECRET, and optionally PAY_RATIO (0.7), POLL_MS (2000),
-//! DEADLINE_SECS (900). Prints a report; exit code 1 if any request failed
-//! with a 5xx or a network error.
+//! `MODE=poll` measures capacity instead: USERS users (ids from USER_ID_START,
+//! no database rows needed) join within JOIN_SPREAD_MS, then poll their
+//! status every POLL_MS until DURATION_SECS have passed.
+//!
+//! Environment: BASE_URL (several, comma-separated, are used round-robin by
+//! user), EVENT_ID, SEAT_COUNT, USER_IDS (a file of user ids, one per line),
+//! JWT_SECRET, and optionally PAY_RATIO (0.7), POLL_MS (2000), DEADLINE_SECS
+//! (900). Prints a report; exit code 1 if any request failed with a 5xx or a
+//! network error.
 
 use std::collections::{BTreeMap, HashMap};
 use std::sync::{Arc, Mutex};
@@ -17,7 +22,7 @@ use serde_json::Value;
 
 struct Ctx {
     client: reqwest::Client,
-    base: String,
+    bases: Vec<String>,
     event_id: i32,
     seat_count: usize,
     pay_ratio: f64,
@@ -57,7 +62,12 @@ impl Ctx {
     }
 
     fn url(&self, path: &str) -> String {
-        format!("{}{}", self.base, path)
+        self.url_for(0, path)
+    }
+
+    /// Spreads users over the API addresses
+    fn url_for(&self, user_id: i32, path: &str) -> String {
+        format!("{}{}", self.bases[user_id as usize % self.bases.len()], path)
     }
 }
 
@@ -100,6 +110,29 @@ async fn user(ctx: Arc<Ctx>, user_id: i32) -> Outcome {
             other => return Outcome::Error(format!("status {other}")),
         }
     }
+}
+
+/// Capacity mode: join, then poll status at a steady rate until the deadline
+async fn poller(ctx: Arc<Ctx>, user_id: i32, join_spread_ms: u64) -> Outcome {
+    let (jwt, _) = conference::auth::issue_token(user_id, &ctx.secret, 3600).expect("sign a token");
+    let bearer = format!("Bearer {jwt}");
+    let e = ctx.event_id;
+    sleep_ms(0, join_spread_ms).await;
+    let (code, _) = ctx
+        .call("join", ctx.client.post(ctx.url_for(user_id, &format!("/waiting-room/{e}/join"))).header("Authorization", &bearer))
+        .await;
+    if code != 202 {
+        return Outcome::Error(format!("join {code}"));
+    }
+    let poll_ms = ctx.poll.as_millis() as u64;
+    // Spread the first poll so the users do not move in lockstep
+    sleep_ms(0, poll_ms).await;
+    while Instant::now() < ctx.deadline {
+        ctx.call("status", ctx.client.get(ctx.url_for(user_id, &format!("/waiting-room/{e}/status"))).header("Authorization", &bearer))
+            .await;
+        sleep_ms(poll_ms * 9 / 10, poll_ms * 11 / 10).await;
+    }
+    Outcome::Timeout
 }
 
 /// Picks and reserves a seat, then pays or walks away
@@ -171,24 +204,40 @@ fn percentile(sorted: &[Duration], p: f64) -> f64 {
 async fn main() {
     let var = |key: &str| std::env::var(key).unwrap_or_else(|_| panic!("{key} must be set"));
     let opt = |key: &str, default: &str| std::env::var(key).unwrap_or_else(|_| default.to_owned());
-    let users: Vec<i32> =
-        std::fs::read_to_string(var("USER_IDS")).expect("read USER_IDS").lines().filter_map(|l| l.trim().parse().ok()).collect();
+    let poll_mode = opt("MODE", "buy") == "poll";
+    let users: Vec<i32> = if poll_mode {
+        let start: i32 = opt("USER_ID_START", "10000000").parse().unwrap();
+        (start..start + var("USERS").parse::<i32>().unwrap()).collect()
+    } else {
+        std::fs::read_to_string(var("USER_IDS")).expect("read USER_IDS").lines().filter_map(|l| l.trim().parse().ok()).collect()
+    };
+    let deadline_secs = if poll_mode { var("DURATION_SECS") } else { opt("DEADLINE_SECS", "900") };
+    let join_spread_ms: u64 = opt("JOIN_SPREAD_MS", "5000").parse().unwrap();
 
     let started = Instant::now();
     let ctx = Arc::new(Ctx {
         client: reqwest::Client::builder().pool_max_idle_per_host(4096).timeout(Duration::from_secs(30)).build().unwrap(),
-        base: var("BASE_URL"),
+        bases: var("BASE_URL").split(',').map(str::to_owned).collect(),
         event_id: var("EVENT_ID").parse().unwrap(),
         seat_count: var("SEAT_COUNT").parse().unwrap(),
         pay_ratio: opt("PAY_RATIO", "0.7").parse().unwrap(),
         poll: Duration::from_millis(opt("POLL_MS", "2000").parse().unwrap()),
-        deadline: started + Duration::from_secs(opt("DEADLINE_SECS", "900").parse().unwrap()),
+        deadline: started + Duration::from_secs(deadline_secs.parse().unwrap()),
         secret: var("JWT_SECRET"),
         samples: Mutex::new(Vec::new()),
     });
     println!("{} users, event {}, {} seats", users.len(), ctx.event_id, ctx.seat_count);
 
-    let tasks: Vec<_> = users.iter().map(|&id| tokio::spawn(user(ctx.clone(), id))).collect();
+    let tasks: Vec<_> = users
+        .iter()
+        .map(|&id| {
+            if poll_mode {
+                tokio::spawn(poller(ctx.clone(), id, join_spread_ms))
+            } else {
+                tokio::spawn(user(ctx.clone(), id))
+            }
+        })
+        .collect();
     let mut outcomes: BTreeMap<Outcome, usize> = BTreeMap::new();
     for task in tasks {
         *outcomes.entry(task.await.unwrap_or(Outcome::Error("task panicked".into()))).or_default() += 1;

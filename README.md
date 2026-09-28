@@ -56,6 +56,7 @@ The API listens on `BIND_ADDR` (`127.0.0.1:8080`). Configuration comes from the 
 | `REDIS_URL`              | `redis://127.0.0.1:6379` |                                                 |
 | `KAFKA_BROKERS`          | `localhost:9092`         | `kafka:29092` from inside compose               |
 | `DB_POOL_SIZE`           | `10`                     | Per process                                     |
+| `REDIS_CONNECTIONS`      | `8`                      | Per API process; one becomes a bottleneck       |
 | `MAX_ACTIVE_TOKENS`      | `2000`                   | Users shopping at once, per event               |
 | `TOKEN_TTL_SECS`         | `600`                    | Time an admitted user has to reserve            |
 | `HOLD_TTL_SECS`          | `300`                    | How long a reservation holds its seats          |
@@ -72,9 +73,10 @@ docker compose up -d
 cargo test                     # unit tests, plus Redis script and provider tests against the containers
 load/reserve_race.sh 1000      # 1,000 admitted users reserve the same seat: exactly one wins
 load/final.sh 10000            # 10,000 users, 100 seats, 70% pay; checks the outcome
+load/capacity.sh 20000 1000 30 # 20,000 users polling every second for 30 s: latency and throughput
 ```
 
-`load/final.sh` runs its own release builds of the API and workers and appends its report to [load/RESULTS.md](load/RESULTS.md).
+The load scripts run their own release builds of the API and workers and append their reports to [load/RESULTS.md](load/RESULTS.md). On one machine the ceiling is about 30,000-37,000 status polls per second, set by Redis; see the capacity summary there.
 
 ## Project Layout
 

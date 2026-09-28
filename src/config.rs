@@ -9,6 +9,9 @@ pub struct Config {
     pub redis_url: String,
     pub kafka_brokers: String,
     pub db_pool_size: u32,
+    /// Redis connections the API spreads its worker threads over. Each one
+    /// multiplexes many requests, but a single one becomes the bottleneck
+    pub redis_connections: usize,
     /// Maximum tokens ACTIVE at once per event (people shopping at the same time)
     pub max_active_tokens: u32,
     pub token_ttl_secs: u64,
@@ -33,6 +36,7 @@ impl Config {
             redis_url: or_default("REDIS_URL", "redis://127.0.0.1:6379".to_string()),
             kafka_brokers: or_default("KAFKA_BROKERS", "localhost:9092".to_string()),
             db_pool_size: or_default("DB_POOL_SIZE", 10),
+            redis_connections: or_default("REDIS_CONNECTIONS", 8),
             max_active_tokens: or_default("MAX_ACTIVE_TOKENS", 2000),
             token_ttl_secs: or_default("TOKEN_TTL_SECS", 600),
             hold_ttl_secs: or_default("HOLD_TTL_SECS", 300),

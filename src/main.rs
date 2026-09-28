@@ -19,7 +19,13 @@ async fn main() -> std::io::Result<()> {
     // Created outside `HttpServer::new` so all workers share one pool
     let pool = db::init_pool(&config);
     db::run_migrations(&pool);
-    let redis = cache::connect(&config).await;
+    // Worker threads take turns picking a connection, so each connection
+    // carries the requests of a few threads (see REDIS_CONNECTIONS)
+    let mut redis = Vec::new();
+    for _ in 0..config.redis_connections.max(1) {
+        redis.push(cache::connect(&config).await);
+    }
+    let next_redis = Arc::new(std::sync::atomic::AtomicUsize::new(0));
     let queue: SharedQueue = Arc::new(KafkaQueue::connect(&config).await.expect("Kafka should be reachable at KAFKA_BROKERS"));
     let queue = web::Data::new(queue);
     let provider = web::Data::new(payment::from_config(&config, pool.clone()));
@@ -31,7 +37,9 @@ async fn main() -> std::io::Result<()> {
     HttpServer::new(move || {
         App::new()
             .app_data(web::Data::new(pool.clone()))
-            .app_data(web::Data::new(redis.clone()))
+            .app_data(web::Data::new(
+                redis[next_redis.fetch_add(1, std::sync::atomic::Ordering::Relaxed) % redis.len()].clone(),
+            ))
             .app_data(queue.clone())
             .app_data(provider.clone())
             .app_data(config.clone())
