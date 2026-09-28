@@ -125,7 +125,9 @@ pub struct JoinedToken {
     pub token_id: String,
     pub status: String,
     pub seq: Option<u64>,
-    /// Whether the token has been written to the event's Kafka topic
+    /// Whether the token is in the event's Kafka topic, or being published
+    /// there by the admission worker (lobby tokens): either way, not the
+    /// caller's to publish
     pub published: bool,
 }
 
@@ -161,7 +163,8 @@ pub async fn join_waiting_room(
         token_id: r[1].clone(),
         status: r[2].clone(),
         seq: r[3].parse().ok(),
-        published: r[4] == "1",
+        // "1" once in Kafka, "lobby" while the admission worker publishes it
+        published: !r[4].is_empty(),
     };
     Ok(match reply.first().map(String::as_str) {
         Some("closed") => JoinOutcome::Closed,
@@ -303,6 +306,7 @@ pub struct TokenSnapshot {
     pub token_id: String,
     pub status: String,
     pub seq: Option<u64>,
+    /// As in `JoinedToken`
     pub published: bool,
     /// Remaining lifetime; `None` when the token has no expiry
     pub expires_in_ms: Option<u64>,
@@ -348,7 +352,8 @@ pub async fn waiting_status(con: &mut RedisConn, event_id: i32, user_id: i32) ->
             token_id: r[1].clone(),
             status: r[2].clone(),
             seq: r[3].parse().ok(),
-            published: r[4] == "1",
+            // "1" once in Kafka, "lobby" while the admission worker publishes it
+        published: !r[4].is_empty(),
             // PTTL is -1 for no expiry
             expires_in_ms: r[5].parse().ok(),
             admitted_upto: r[6].parse().unwrap_or(0),

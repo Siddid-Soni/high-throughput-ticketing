@@ -376,14 +376,15 @@ A token's place in line is its **Kafka offset**: `seq = offset + 1`. The queue i
 **Check:** `docker compose --profile app up` starts all services; the full flow works end to end. (Verified: join before opening, admitted at opening by the containerized worker, reserve, pay, `CONFIRMED` by the payment worker; a fresh database is migrated by the API.)
 
 ### 8.3 Final load test
-- [ ] `load/final.js`: 10,000 users join an event with 100 seats; admitted users reserve a random free seat; 70% pay, 30% abandon.
-- [ ] End-of-run assertions in SQL:
+- [x] `load/final.sh [N]` (k6 is not installed; the simulated buyers are a small Rust crate, `load/final/`, that signs its users' JWTs with `JWT_SECRET` instead of 10,000 slow Argon2 logins): 10,000 users join an event with 100 seats; admitted users reserve a random free seat; 70% pay, 30% abandon. Runs release builds of the API and workers with short holds (20 s + 20 s for payment) so abandoned seats return quickly.
+- [x] End-of-run assertions in SQL:
   - `SELECT count(*) FROM event_seats WHERE event_id = $1 AND status = 'SOLD'` ≤ 100
   - no `booking_id` appears on more seats than it reserved
   - no `PAYMENT_PENDING` booking past `expires_at` + a few seconds
-- [ ] Record results in `load/RESULTS.md`.
+  - also: every sold seat's booking is `CONFIRMED`, `CONFIRMED` bookings equal the users who paid, and Redis `sold` and `available` match Postgres
+- [x] Record results in `load/RESULTS.md`.
 
-**Check:** all assertions pass; results recorded.
+**Check:** all assertions pass; results recorded. Result (after the fix below): 100 sold to exactly the 100 buyers who paid, 50 abandoned holds resold, 9,850 turned away as sold out, no server errors; status served 3,800 req/s at p50 0.3 ms, p99 0.8 ms. The first 10,000-user run found a bug: status polls during the lobby shuffle republished tokens the worker had not published yet (15,340 messages for 10,000 users, one `500`, status p99 59 ms); lobby tokens are now marked `published = lobby` by `flush_lobby.lua` so the API leaves them to the worker.
 
 ### 8.4 Documentation
-- [ ] Update `README.md` and `API_REFERENCE.md` for the new endpoints and services.
+- [x] Update `README.md` and `API_REFERENCE.md` for the new endpoints and services. (`API_REFERENCE.md` was rewritten from the handlers; the old one described the removed conference API.)

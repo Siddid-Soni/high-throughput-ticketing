@@ -19,7 +19,11 @@ for _, id in ipairs(ids) do
   local token = 'token:' .. id
   -- EXISTS guards against recreating a token that was deleted
   if redis.call('EXISTS', token) == 1 then
-    redis.call('HSET', token, 'status', 'QUEUED')
+    -- `published = lobby`: the admission worker publishes it (in shuffled
+    -- order). Joins and status polls republish QUEUED tokens that were never
+    -- published, and must leave these alone, or thousands of polls during
+    -- the flush would publish duplicates out of order.
+    redis.call('HSET', token, 'status', 'QUEUED', 'published', 'lobby')
     redis.call('RPUSH', KEYS[2], id)
   end
 end
