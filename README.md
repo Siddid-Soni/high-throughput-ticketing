@@ -1,4 +1,4 @@
-# Ticketing API
+# High-Throughput Ticketing
 
 A ticket sales service for high-traffic on-sales, built with Rust (Actix-Web, Diesel), PostgreSQL, Redis and Kafka. Users wait in a queue and are let in so that a fixed number shop at once; they hold seats for a limited time and confirm them by paying.
 
