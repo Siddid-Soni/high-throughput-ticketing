@@ -12,7 +12,8 @@ use conference::{config::Config, db, models::PaymentInboxEntry, schema::payment_
 #[test]
 fn intent_produces_an_inbox_event() {
     let pool = db::init_pool(&Config::from_env());
-    let provider = FakeProvider::new(pool.clone(), Duration::from_millis(100));
+    let redis = redis::Client::open("redis://127.0.0.1:6379/15").unwrap();
+    let provider = FakeProvider::new(pool.clone(), redis, Duration::from_millis(100));
     let reservation_id = Uuid::new_v4();
     let key = Uuid::new_v4().to_string();
 

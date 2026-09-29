@@ -566,13 +566,19 @@ pub enum ClaimOutcome {
     Gone,
 }
 
+/// How long a claimed hold is kept while its confirmation waits for the
+/// payment worker. Far longer than any backlog; the commit deletes it.
+pub const CLAIMED_HOLD_TTL_MS: u64 = 24 * 60 * 60 * 1000;
+
 /// Runs `confirm.lua`: phase 1 of a confirmation (claim, commit, finalize).
+/// Called when the success event arrives and again by the payment worker.
 pub fn claim_hold(con: &mut dyn redis::ConnectionLike, reservation_id: &str, intent_id: &str) -> redis::RedisResult<ClaimOutcome> {
     let r: Vec<String> = CONFIRM_SCRIPT
         .key(format!("resv:{reservation_id}"))
         .key(HOLDS_EXPIRY_KEY)
         .arg(reservation_id)
         .arg(intent_id)
+        .arg(CLAIMED_HOLD_TTL_MS)
         .invoke(con)?;
     Ok(match (r.first().map(String::as_str), r.len()) {
         (Some("won"), 2) => ClaimOutcome::Won(parse_hold(&r[1])?),

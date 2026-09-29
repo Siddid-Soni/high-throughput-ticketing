@@ -9,7 +9,7 @@ A ticket sales service for high-traffic on-sales, built with Rust (Actix-Web, Di
 1. **Join.** Users join an event's waiting room. Before the sale opens they wait in a lobby, shuffled into a random order at the opening; afterwards the queue is first come, first served. The queue is a Kafka topic per event.
 2. **Admission.** The admission worker lets the next user in whenever fewer than `min(MAX_ACTIVE_TOKENS, free seats)` are shopping. Admitted users see the seat map.
 3. **Reserve.** A reservation holds seats in Redis for `HOLD_TTL_SECS`, all or none, and uses up the user's turn. It never touches PostgreSQL: this is the busiest step.
-4. **Pay.** Paying extends the hold once and records the booking. The payment provider reports the outcome to an inbox table, and the payment worker confirms the booking (seats sold) or refunds a payment that arrived after the hold ran out.
+4. **Pay.** Paying extends the hold once and records the booking. The payment provider reports the outcome to an inbox table; a success claims the hold at once, so a payment that arrives in time is kept however busy the payment worker is. The worker then confirms the booking (seats sold) or refunds a payment that arrived after the hold ran out.
 5. **Expire.** The cleanup worker releases holds whose time is up.
 
 ## Components

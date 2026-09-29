@@ -1,5 +1,7 @@
-//! Runs the reserve and release scripts against the Redis at `REDIS_URL`
-//! (`docker compose up -d redis`). Each test uses its own random event id.
+//! Runs the reserve and release scripts against Redis (`docker compose up -d
+//! redis`), in database 15 so the tests never see, or are slowed down by, the
+//! data in the database the API uses. Override with `TEST_REDIS_URL`. Each test
+//! uses its own random event id.
 
 use chrono::Utc;
 use redis::AsyncCommands;
@@ -11,7 +13,7 @@ const MAX_SEATS: u32 = 4;
 
 async fn connect() -> RedisConn {
     dotenvy::dotenv().ok();
-    let url = std::env::var("REDIS_URL").unwrap_or_else(|_| "redis://127.0.0.1:6379".into());
+    let url = std::env::var("TEST_REDIS_URL").unwrap_or_else(|_| "redis://127.0.0.1:6379/15".into());
     let client = redis::Client::open(url).unwrap();
     redis::aio::ConnectionManager::new(client).await.expect("Redis should be running for these tests")
 }
@@ -164,5 +166,54 @@ async fn rejoining_keeps_the_seat_limit() {
     admit(&mut con, e, 1).await;
     assert_eq!(reserve(&mut con, e, 1, &[2, 3, 4]).await, ReserveOutcome::TooMany { held: 2 });
     assert!(matches!(reserve(&mut con, e, 1, &[2, 3]).await, ReserveOutcome::Held { .. }));
+    cleanup(&mut con, e).await;
+}
+
+/// A payment reported while its hold is live wins even if the payment worker
+/// only gets to it after the hold would have expired: the hold is claimed on
+/// receipt, so expiry cannot take it and the worker's own claim still wins.
+/// A payment claimed only after the hold ended is refunded (the control).
+#[tokio::test]
+async fn payment_claimed_on_receipt_survives_a_worker_backlog() {
+    let mut con = connect().await;
+    let e = event(&mut con).await;
+    admit(&mut con, e, 1).await;
+    admit(&mut con, e, 2).await;
+    let mut sync = redis::Client::open(std::env::var("TEST_REDIS_URL").unwrap_or_else(|_| "redis://127.0.0.1:6379/15".into()))
+        .unwrap()
+        .get_connection()
+        .unwrap();
+
+    // Two holds of 300 ms, both paying (extended by 200 ms)
+    let (paid, late) = (uuid::Uuid::new_v4().to_string(), uuid::Uuid::new_v4().to_string());
+    for (resv, user, seat) in [(&paid, 1, 1), (&late, 2, 2)] {
+        let held = cache::reserve_seats(&mut con, e, user, resv, &[seat], 300, MAX_SEATS).await.unwrap();
+        assert!(matches!(held, ReserveOutcome::Held { .. }));
+        assert!(matches!(cache::start_payment(&mut con, resv, user, 200).await.unwrap(), cache::StartPaymentOutcome::Paying { .. }));
+    }
+
+    // The first payment's success event arrives in time and is claimed at once
+    assert!(matches!(cache::claim_hold(&mut sync, &paid, "pi_paid").unwrap(), cache::ClaimOutcome::Won(_)));
+
+    // The worker is behind: both holds pass their expiry, and cleanup runs
+    tokio::time::sleep(std::time::Duration::from_millis(800)).await;
+    cache::claim_expired(&mut sync, 500).unwrap();
+
+    // The claimed hold kept its seat and is still there for the worker...
+    assert!(con.getbit::<_, bool>(cache::seats_key(e), 1).await.unwrap());
+    assert!(con.exists::<_, bool>(format!("resv:{paid}")).await.unwrap());
+    // ...whose claim, with the same intent, wins
+    assert!(matches!(cache::claim_hold(&mut sync, &paid, "pi_paid").unwrap(), cache::ClaimOutcome::Won(_)));
+    // It is kept far longer than the hold's own expiry plus grace
+    let ttl: i64 = con.pttl(format!("resv:{paid}")).await.unwrap();
+    assert!(ttl > 60 * 60 * 1000, "claimed hold TTL {ttl} ms");
+
+    // The unclaimed one expired and was released: its payment is refunded
+    assert!(!con.getbit::<_, bool>(cache::seats_key(e), 2).await.unwrap());
+    assert_eq!(cache::claim_hold(&mut sync, &late, "pi_late").unwrap(), cache::ClaimOutcome::Gone);
+    // Another payment for the claimed hold does not win it
+    assert_eq!(cache::claim_hold(&mut sync, &paid, "pi_other").unwrap(), cache::ClaimOutcome::Gone);
+
+    let _: () = con.del(&[format!("resv:{paid}"), format!("resv:{late}")]).await.unwrap();
     cleanup(&mut con, e).await;
 }

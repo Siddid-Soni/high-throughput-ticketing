@@ -4,13 +4,16 @@
 //! A successful payment is confirmed in three phases so that a crash at any
 //! point is retried safely:
 //! 1. claim the hold in Redis (`confirm.lua` records this payment as its
-//!    winner, so a retry of the same payment claims it again),
+//!    winner, so a retry of the same payment claims it again). Normally this
+//!    already happened when the event was received (`payment::record_event`),
+//!    so however far behind this worker is, a payment that arrived before its
+//!    hold ended is confirmed; here it finds its own claim,
 //! 2. in one Postgres transaction, sell the seats, confirm the booking and
 //!    mark the event processed,
 //! 3. after the commit, delete the hold and count the seats sold
 //!    (`finalize.lua`).
 //!
-//! A payment for a hold that expired first is refunded.
+//! A payment for a hold that expired before the payment arrived is refunded.
 //!
 //! Usage: `cargo run --bin payment_worker`
 
