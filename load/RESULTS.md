@@ -286,3 +286,300 @@ Bookings: CONFIRMED 100. Holds still queued in Redis (all events): 0.
 - [x] CONFIRMED bookings equal to users who paid (100)
 - [x] Redis sold:{event} equal to seats sold (100)
 - [x] Redis available:{event} equal to unsold seats (0)
+
+## Buying path 2026-09-28 22:10 UTC: 1000 users, 1000 seats, no status polling
+
+Everyone joins within 2000 ms of opening and is admitted at once (the script watches Redis; nobody polls status), then everyone shops within 2000 ms: seat map, a random free seat (retrying when taken), then pay (0.7) or walk away. One API process, one admission and one cleanup worker, 1 payment worker(s); all on one machine.
+
+| phase | seconds |
+|---|---|
+| 1000 joins | 2.0 |
+| admission of all 1000 (after the last join) | 0.1 |
+| shopping: seat map, reserve, pay | 6.4 |
+| last payment confirmed (after shopping ended; fake provider 1000 ms, 1 payment worker(s)) | 1.7 |
+
+| endpoint | requests | req/s | p50 ms | p95 ms | p99 ms | max ms | responses |
+|---|---|---|---|---|---|---|---|
+| join | 1000 | 498 | 3.1 | 4.4 | 4.8 | 8.1 | 202: 1000 |
+
+Outcomes:
+  Paid: 711
+  Abandoned: 280
+  NoSeat: 9
+
+| endpoint | requests | req/s | p50 ms | p95 ms | p99 ms | max ms | responses |
+|---|---|---|---|---|---|---|---|
+| availability | 1511 | 235 | 0.2 | 0.7 | 0.9 | 1.7 | 200: 1511 |
+| reserve | 1511 | 235 | 0.3 | 0.6 | 0.9 | 1.5 | 201: 991, 409: 520 |
+| pay | 711 | 111 | 3.3 | 4.8 | 6.8 | 9.5 | 200: 711 |
+
+Server errors and network failures: 0
+
+- [x] seats sold equal to CONFIRMED bookings (711)
+- [x] CONFIRMED bookings equal to users who paid (711)
+- [x] payments refunded (0)
+- [x] bookings holding more seats than they reserved (0)
+- [x] sold seats whose booking is not CONFIRMED (0)
+- [x] PAYMENT_PENDING bookings past expires_at + 5 s (0)
+- [x] Redis sold:{event} equal to seats sold (711)
+- [x] Redis available:{event} equal to unsold seats (289)
+- [x] Kafka messages equal to users (1000)
+
+## Buying path 2026-09-28 22:11 UTC: 50000 users, 50000 seats, no status polling
+
+Everyone joins within 2000 ms of opening and is admitted at once (the script watches Redis; nobody polls status), then everyone shops within 2000 ms: seat map, a random free seat (retrying when taken), then pay (0.7) or walk away. One API process, one admission and one cleanup worker, 1 payment worker(s); all on one machine.
+
+| phase | seconds |
+|---|---|
+| 50000 joins | 2.1 |
+| admission of all 50000 (after the last join) | 4.4 |
+| shopping: seat map, reserve, pay | 4.6 |
+| last payment confirmed (after shopping ended; fake provider 1000 ms, 1 payment worker(s)) | 4.2 |
+
+| endpoint | requests | req/s | p50 ms | p95 ms | p99 ms | max ms | responses |
+|---|---|---|---|---|---|---|---|
+| join | 50000 | 24100 | 5.0 | 19.9 | 32.6 | 44.9 | 202: 50000 |
+
+Outcomes:
+  Paid: 5
+  Abandoned: 501
+  Error("availability 500"): 33142
+  Error("pay 500"): 1138
+  Error("reserve 500"): 15214
+
+| endpoint | requests | req/s | p50 ms | p95 ms | p99 ms | max ms | responses |
+|---|---|---|---|---|---|---|---|
+| availability | 50036 | 11642 | 1405.0 | 1683.9 | 1780.3 | 1953.7 | 200: 16894, 500: 33142 |
+| reserve | 16894 | 3931 | 1495.1 | 1742.3 | 1818.8 | 1954.1 | 201: 1644, 409: 36, 500: 15214 |
+| pay | 1143 | 266 | 1549.0 | 1768.0 | 1833.7 | 1881.4 | 200: 5, 500: 1138 |
+
+Server errors and network failures: 49494
+
+- [x] seats sold equal to CONFIRMED bookings (5)
+- [x] CONFIRMED bookings equal to users who paid (5)
+- [x] payments refunded (0)
+- [x] bookings holding more seats than they reserved (0)
+- [x] sold seats whose booking is not CONFIRMED (0)
+- [x] PAYMENT_PENDING bookings past expires_at + 5 s (0)
+- [x] Redis sold:{event} equal to seats sold (5)
+- [ ] **FAILED** Redis available:{event} equal to unsold seats: 48857, expected 49995
+- [x] Kafka messages equal to users (50000)
+
+## Buying path 2026-09-28 22:16 UTC: 2000 users, 2000 seats, no status polling, at most 200 shopping
+
+Everyone joins within 2000 ms of opening; the waiting room admits at most 200 shoppers at a time. Users learn they are admitted by trying the seat map every 2000 ms (403 until then; nobody polls status), then pick a random free seat (retrying when taken) and pay (0.7) or walk away. One API process, one admission and one cleanup worker, 1 payment worker(s); all on one machine.
+
+| phase | seconds |
+|---|---|
+| whole sale: joins, admission at most 200 at a time, shopping | 25.1 |
+| purchases per second (paid / whole sale) | 56 |
+
+| last payment confirmed (after shopping ended; fake provider 1000 ms, 1 payment worker(s)) | 1.3 |
+
+
+Outcomes:
+  Paid: 1404
+  Abandoned: 595
+  NoSeat: 1
+
+| endpoint | requests | req/s | p50 ms | p95 ms | p99 ms | max ms | responses |
+|---|---|---|---|---|---|---|---|
+| join | 2000 | 80 | 2.9 | 4.2 | 4.9 | 12.7 | 202: 2000 |
+| wait | 10325 | 411 | 0.3 | 0.5 | 0.7 | 1.1 | 200: 2000, 403: 8325 |
+| availability | 2264 | 90 | 0.2 | 0.4 | 0.6 | 0.9 | 200: 2264 |
+| reserve | 2264 | 90 | 0.4 | 0.7 | 0.9 | 1.4 | 201: 1999, 409: 265 |
+| pay | 1404 | 56 | 3.4 | 5.0 | 6.5 | 12.7 | 200: 1404 |
+
+Server errors and network failures: 0
+
+- [x] seats sold equal to CONFIRMED bookings (1404)
+- [x] CONFIRMED bookings equal to users who paid (1404)
+- [x] payments refunded (0)
+- [x] bookings holding more seats than they reserved (0)
+- [x] sold seats whose booking is not CONFIRMED (0)
+- [x] PAYMENT_PENDING bookings past expires_at + 5 s (0)
+- [x] Redis sold:{event} equal to seats sold (1404)
+- [x] Redis available:{event} equal to unsold seats (596)
+- [x] Kafka messages equal to users (2000)
+
+## Buying path 2026-09-28 22:21 UTC: 50000 users, 50000 seats, no status polling, at most 2000 shopping
+
+Everyone joins within 2000 ms of opening; the waiting room admits at most 2000 shoppers at a time. Users learn they are admitted by trying the seat map every 2000 ms (403 until then; nobody polls status), then pick a random free seat (retrying when taken) and pay (0.7) or walk away. One API process, one admission and one cleanup worker, 1 payment worker(s); all on one machine.
+
+| phase | seconds |
+|---|---|
+| whole sale: joins, admission at most 2000 at a time, shopping | 50.5 |
+| purchases per second (paid / whole sale) | 692 |
+| last payment confirmed (after shopping ended; fake provider 1000 ms, 1 payment worker(s)) | 224.9 |
+
+
+Outcomes:
+  Paid: 34947
+  Abandoned: 15053
+
+| endpoint | requests | req/s | p50 ms | p95 ms | p99 ms | max ms | responses |
+|---|---|---|---|---|---|---|---|
+| join | 50000 | 991 | 4.1 | 16.5 | 45.2 | 63.3 | 202: 50000 |
+| wait | 594398 | 11782 | 0.8 | 1.7 | 3.5 | 43.5 | 200: 50000, 403: 544398 |
+| availability | 51754 | 1026 | 0.6 | 1.7 | 9.2 | 40.4 | 200: 51754 |
+| reserve | 51754 | 1026 | 0.8 | 1.7 | 3.1 | 30.2 | 201: 50000, 409: 1754 |
+| pay | 34947 | 693 | 5.2 | 9.3 | 19.6 | 51.2 | 200: 34947 |
+
+Server errors and network failures: 0
+
+- [x] seats sold equal to CONFIRMED bookings (23313)
+- [ ] **FAILED** CONFIRMED bookings equal to users who paid: 23313, expected 34947
+- [ ] **FAILED** payments refunded: 11634, expected 0
+- [x] bookings holding more seats than they reserved (0)
+- [x] sold seats whose booking is not CONFIRMED (0)
+- [x] PAYMENT_PENDING bookings past expires_at + 5 s (0)
+- [x] Redis sold:{event} equal to seats sold (23313)
+- [x] Redis available:{event} equal to unsold seats (26687)
+- [x] Kafka messages equal to users (50000)
+
+## Buying path 2026-09-28 22:48 UTC: 50000 users, 50000 seats, no status polling, at most 2000 shopping
+
+Everyone joins within 2000 ms of opening; the waiting room admits at most 2000 shoppers at a time. Users learn they are admitted by trying the seat map every 2000 ms (403 until then; nobody polls status), then pick a random free seat (retrying when taken) and pay (0.7) or walk away. One API process, one admission and one cleanup worker, 1 payment worker(s); all on one machine.
+
+| phase | seconds |
+|---|---|
+| whole sale: joins, admission at most 2000 at a time, shopping | 902.7 |
+| purchases per second (paid / whole sale) | 30 |
+| last payment confirmed (after shopping ended; fake provider 1000 ms, 1 payment worker(s)) | 0.1 |
+
+
+Outcomes:
+  Paid: 27393
+  Abandoned: 11668
+  Timeout: 3904
+  Error("join 500"): 4991
+  Error("pay 0"): 1
+  Error("wait 0"): 93
+  Error("wait 408"): 9
+  Error("wait 500"): 1941
+
+| endpoint | requests | req/s | p50 ms | p95 ms | p99 ms | max ms | responses |
+|---|---|---|---|---|---|---|---|
+| join | 50000 | 55 | 581.2 | 1146.4 | 1437.8 | 1526.9 | 202: 45009, 500: 4991 |
+| wait | 9355930 | 10370 | 0.3 | 1.0 | 51.9 | 1237.0 | 0: 93, 200: 39062, 403: 9314825, 408: 9, 500: 1941 |
+| availability | 39406 | 44 | 0.3 | 3.4 | 512.3 | 1062.5 | 200: 39406 |
+| reserve | 39406 | 44 | 0.5 | 2.9 | 105.3 | 395.5 | 201: 39062, 409: 344 |
+| pay | 27394 | 30 | 3.7 | 10.5 | 80.9 | 424.4 | 0: 1, 200: 27393 |
+
+Server errors and network failures: 7026
+
+- [x] seats sold equal to CONFIRMED bookings (27393)
+- [x] CONFIRMED bookings equal to users who paid (27393)
+- [x] payments refunded (0)
+- [x] bookings holding more seats than they reserved (0)
+- [x] sold seats whose booking is not CONFIRMED (0)
+- [x] PAYMENT_PENDING bookings past expires_at + 5 s (0)
+- [x] Redis sold:{event} equal to seats sold (27393)
+- [x] Redis available:{event} equal to unsold seats (22607)
+- [ ] **FAILED** Kafka messages equal to users: 48442, expected 50000
+
+## Buying path 2026-09-28 23:13 UTC: 2000 users, 2000 seats, no status polling, at most 200 shopping
+
+Everyone joins within 2000 ms of opening; the waiting room admits at most 200 shoppers at a time. Users learn they are admitted by trying the seat map every 2000 ms (403 until then; nobody polls status), then pick a random free seat (retrying when taken) and pay (0.7) or walk away. One API process, one admission and one cleanup worker, 1 payment worker(s); all on one machine.
+
+| phase | seconds |
+|---|---|
+| whole sale: joins, admission at most 200 at a time, shopping | 25.1 |
+| purchases per second (paid / whole sale) | 55 |
+| last payment confirmed (after shopping ended; fake provider 1000 ms, 1 payment worker(s)) | 1.8 |
+
+
+Outcomes:
+  Paid: 1380
+  Abandoned: 618
+  NoSeat: 2
+
+| endpoint | requests | req/s | p50 ms | p95 ms | p99 ms | max ms | responses |
+|---|---|---|---|---|---|---|---|
+| join | 2000 | 80 | 2.9 | 4.2 | 4.8 | 12.0 | 202: 2000 |
+| wait | 10363 | 412 | 0.3 | 0.6 | 0.7 | 23.2 | 200: 2000, 403: 8363 |
+| availability | 2295 | 91 | 0.2 | 0.4 | 0.6 | 1.1 | 200: 2295 |
+| reserve | 2295 | 91 | 0.4 | 0.8 | 1.0 | 7.0 | 201: 1998, 409: 297 |
+| pay | 1380 | 55 | 3.7 | 5.6 | 6.9 | 29.2 | 200: 1380 |
+
+Server errors and network failures: 0
+
+- [x] seats sold equal to CONFIRMED bookings (1380)
+- [x] CONFIRMED bookings equal to users who paid (1380)
+- [x] payments refunded (0)
+- [x] bookings holding more seats than they reserved (0)
+- [x] sold seats whose booking is not CONFIRMED (0)
+- [x] PAYMENT_PENDING bookings past expires_at + 5 s (0)
+- [x] Redis sold:{event} equal to seats sold (1380)
+- [x] Redis available:{event} equal to unsold seats (620)
+- [x] Kafka messages equal to users (2000)
+
+## Buying path 2026-09-28 23:24 UTC: 50000 users, 50000 seats, no status polling, at most 2000 shopping
+
+Everyone joins within 2000 ms of opening; the waiting room admits at most 2000 shoppers at a time. Users learn they are admitted by trying the seat map every 2000 ms (403 until then; nobody polls status), then pick a random free seat (retrying when taken) and pay (0.7) or walk away. One API process, one admission and one cleanup worker, 1 payment worker(s); all on one machine.
+
+| phase | seconds |
+|---|---|
+| whole sale: joins, admission at most 2000 at a time, shopping | 52.7 |
+| purchases per second (paid / whole sale) | 664 |
+| last payment confirmed (after shopping ended; fake provider 1000 ms, 1 payment worker(s)) | 583.4 |
+
+
+Outcomes:
+  Paid: 35006
+  Abandoned: 14994
+
+| endpoint | requests | req/s | p50 ms | p95 ms | p99 ms | max ms | responses |
+|---|---|---|---|---|---|---|---|
+| join | 50000 | 951 | 4.4 | 45.6 | 57.8 | 75.5 | 202: 50000 |
+| wait | 596853 | 11354 | 0.9 | 2.3 | 4.8 | 40.9 | 200: 50000, 403: 546853 |
+| availability | 51797 | 985 | 0.8 | 2.7 | 13.4 | 36.1 | 200: 51797 |
+| reserve | 51797 | 985 | 1.0 | 2.5 | 5.2 | 25.9 | 201: 50000, 409: 1797 |
+| pay | 35006 | 666 | 5.9 | 2572.4 | 3001.5 | 4540.7 | 200: 35006 |
+
+Server errors and network failures: 0
+
+- [x] seats sold equal to CONFIRMED bookings (28212)
+- [ ] **FAILED** CONFIRMED bookings equal to users who paid: 28212, expected 35006
+- [ ] **FAILED** payments refunded: 6794, expected 0
+- [x] bookings holding more seats than they reserved (0)
+- [x] sold seats whose booking is not CONFIRMED (0)
+- [x] PAYMENT_PENDING bookings past expires_at + 5 s (0)
+- [x] Redis sold:{event} equal to seats sold (28212)
+- [x] Redis available:{event} equal to unsold seats (21788)
+- [x] Kafka messages equal to users (50000)
+
+## Buying path 2026-09-28 23:42 UTC: 50000 users, 50000 seats, no status polling, at most 2000 shopping
+
+Everyone joins within 2000 ms of opening; the waiting room admits at most 2000 shoppers at a time. Users learn they are admitted by trying the seat map every 2000 ms (403 until then; nobody polls status), then pick a random free seat (retrying when taken) and pay (0.7) or walk away. One API process, one admission and one cleanup worker, 1 payment worker(s); all on one machine.
+
+| phase | seconds |
+|---|---|
+| whole sale: joins, admission at most 2000 at a time, shopping | 50.8 |
+| purchases per second (paid / whole sale) | 694 |
+| last payment confirmed (after shopping ended; fake provider 1000 ms, 1 payment worker(s)) | 905.9 |
+
+
+Outcomes:
+  Paid: 35266
+  Abandoned: 14734
+
+| endpoint | requests | req/s | p50 ms | p95 ms | p99 ms | max ms | responses |
+|---|---|---|---|---|---|---|---|
+| join | 50000 | 986 | 4.0 | 26.2 | 56.7 | 78.7 | 202: 50000 |
+| wait | 592986 | 11688 | 0.7 | 1.4 | 2.2 | 46.6 | 200: 50000, 403: 542986 |
+| availability | 51753 | 1020 | 0.5 | 1.4 | 13.7 | 47.4 | 200: 51753 |
+| reserve | 51753 | 1020 | 0.7 | 1.5 | 2.0 | 29.3 | 201: 50000, 409: 1753 |
+| pay | 35266 | 695 | 4.6 | 9.4 | 1215.2 | 2252.6 | 200: 35266 |
+
+Server errors and network failures: 0
+
+- [x] seats sold equal to CONFIRMED bookings (35266)
+- [x] CONFIRMED bookings equal to users who paid (35266)
+- [x] payments refunded (0)
+- [x] bookings holding more seats than they reserved (0)
+- [x] sold seats whose booking is not CONFIRMED (0)
+- [x] PAYMENT_PENDING bookings past expires_at + 5 s (0)
+- [x] Redis sold:{event} equal to seats sold (35266)
+- [x] Redis available:{event} equal to unsold seats (14734)
+- [x] Kafka messages equal to users (50000)

@@ -8,6 +8,15 @@
 //! no database rows needed) join within JOIN_SPREAD_MS, then poll their
 //! status every POLL_MS until DURATION_SECS have passed.
 //!
+//! `MODE=join` and `MODE=shop` split a sale without status polling:
+//! `join` has every user join within JOIN_SPREAD_MS and exits; once the
+//! caller sees them admitted, `shop` has every user, within JOIN_SPREAD_MS,
+//! read the seat map, reserve a random free seat and pay or walk away.
+//!
+//! `MODE=queue` is a whole sale without status polling: users join within
+//! JOIN_SPREAD_MS, then try the seat map every POLL_MS (it answers `403`
+//! until they are admitted), then shop as above.
+//!
 //! Environment: BASE_URL (several, comma-separated, are used round-robin by
 //! user), EVENT_ID, SEAT_COUNT, USER_IDS (a file of user ids, one per line),
 //! JWT_SECRET, and optionally PAY_RATIO (0.7), POLL_MS (2000), DEADLINE_SECS
@@ -34,6 +43,7 @@ struct Ctx {
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
 enum Outcome {
+    Joined,
     Paid,
     Abandoned,
     SoldOut,
@@ -135,6 +145,50 @@ async fn poller(ctx: Arc<Ctx>, user_id: i32, join_spread_ms: u64) -> Outcome {
     Outcome::Timeout
 }
 
+/// `MODE=join`: join and stop
+async fn joiner(ctx: Arc<Ctx>, user_id: i32, spread_ms: u64) -> Outcome {
+    let (jwt, _) = conference::auth::issue_token(user_id, &ctx.secret, 3600).expect("sign a token");
+    sleep_ms(0, spread_ms).await;
+    let e = ctx.event_id;
+    let (code, _) = ctx
+        .call("join", ctx.client.post(ctx.url_for(user_id, &format!("/waiting-room/{e}/join"))).header("Authorization", format!("Bearer {jwt}")))
+        .await;
+    if code == 202 { Outcome::Joined } else { Outcome::Error(format!("join {code}")) }
+}
+
+/// `MODE=shop`: an admitted user buys (or abandons) without polling status
+async fn shopper(ctx: Arc<Ctx>, user_id: i32, spread_ms: u64) -> Outcome {
+    let (jwt, _) = conference::auth::issue_token(user_id, &ctx.secret, 3600).expect("sign a token");
+    sleep_ms(0, spread_ms).await;
+    shop(&ctx, &format!("Bearer {jwt}")).await
+}
+
+/// `MODE=queue`: join, wait for admission by trying the seat map, then shop
+async fn queued_shopper(ctx: Arc<Ctx>, user_id: i32, spread_ms: u64) -> Outcome {
+    let (jwt, _) = conference::auth::issue_token(user_id, &ctx.secret, 3600).expect("sign a token");
+    let bearer = format!("Bearer {jwt}");
+    let e = ctx.event_id;
+    sleep_ms(0, spread_ms).await;
+    let (code, _) =
+        ctx.call("join", ctx.client.post(ctx.url_for(user_id, &format!("/waiting-room/{e}/join"))).header("Authorization", &bearer)).await;
+    if code != 202 {
+        return Outcome::Error(format!("join {code}"));
+    }
+    let poll_ms = ctx.poll.as_millis() as u64;
+    while Instant::now() < ctx.deadline {
+        sleep_ms(poll_ms * 9 / 10, poll_ms * 11 / 10).await;
+        let (code, _) = ctx
+            .call("wait", ctx.client.get(ctx.url_for(user_id, &format!("/events/{e}/availability"))).header("Authorization", &bearer))
+            .await;
+        match code {
+            200 => return shop(&ctx, &bearer).await,
+            403 => {}
+            other => return Outcome::Error(format!("wait {other}")),
+        }
+    }
+    Outcome::Timeout
+}
+
 /// Picks and reserves a seat, then pays or walks away
 async fn shop(ctx: &Ctx, bearer: &str) -> Outcome {
     let e = ctx.event_id;
@@ -204,7 +258,8 @@ fn percentile(sorted: &[Duration], p: f64) -> f64 {
 async fn main() {
     let var = |key: &str| std::env::var(key).unwrap_or_else(|_| panic!("{key} must be set"));
     let opt = |key: &str, default: &str| std::env::var(key).unwrap_or_else(|_| default.to_owned());
-    let poll_mode = opt("MODE", "buy") == "poll";
+    let mode = opt("MODE", "buy");
+    let poll_mode = mode == "poll";
     let users: Vec<i32> = if poll_mode {
         let start: i32 = opt("USER_ID_START", "10000000").parse().unwrap();
         (start..start + var("USERS").parse::<i32>().unwrap()).collect()
@@ -233,6 +288,12 @@ async fn main() {
         .map(|&id| {
             if poll_mode {
                 tokio::spawn(poller(ctx.clone(), id, join_spread_ms))
+            } else if mode == "join" {
+                tokio::spawn(joiner(ctx.clone(), id, join_spread_ms))
+            } else if mode == "shop" {
+                tokio::spawn(shopper(ctx.clone(), id, join_spread_ms))
+            } else if mode == "queue" {
+                tokio::spawn(queued_shopper(ctx.clone(), id, join_spread_ms))
             } else {
                 tokio::spawn(user(ctx.clone(), id))
             }
@@ -259,7 +320,7 @@ async fn main() {
     println!("\n| endpoint | requests | req/s | p50 ms | p95 ms | p99 ms | max ms | responses |");
     println!("|---|---|---|---|---|---|---|---|");
     let mut failed = 0;
-    for endpoint in ["join", "status", "availability", "reserve", "pay"] {
+    for endpoint in ["join", "status", "wait", "availability", "reserve", "pay"] {
         let Some((latencies, codes)) = by_endpoint.get_mut(endpoint) else { continue };
         latencies.sort_unstable();
         failed += codes.iter().filter(|(code, _)| **code == 0 || **code >= 500).map(|(_, n)| n).sum::<usize>();
